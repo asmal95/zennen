@@ -21,6 +21,26 @@ func PastStrs() (yesterday, dayBefore string) {
 	return now.AddDate(0, 0, -1).Format("2006-01-02"), now.AddDate(0, 0, -2).Format("2006-01-02")
 }
 
+// FutureStrs — завтра и послезавтра для target_date в промпте.
+func FutureStrs() (tomorrow, dayAfter string) {
+	now := time.Now()
+	return now.AddDate(0, 0, 1).Format("2006-01-02"), now.AddDate(0, 0, 2).Format("2006-01-02")
+}
+
+// ResolveTargetDate проверяет target_date от LLM: валидный ISO в окне
+// [вчера, сегодня+365]. Прошлое старше вчера и мусор → "".
+func ResolveTargetDate(dateStr string, now time.Time) string {
+	d, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return ""
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if d.Before(today.AddDate(0, 0, -1)) || d.After(today.AddDate(1, 0, 0)) {
+		return ""
+	}
+	return d.Format("2006-01-02")
+}
+
 // ResolveEntryDate проверяет entry_date от LLM: только прошлое (не старше года)
 // и не будущее. Пусто/мусор/будущее → "" (= сегодня).
 func ResolveEntryDate(dateStr string, now time.Time) string {
@@ -49,6 +69,7 @@ type IngestResult struct {
 	Blocks     []db.Block
 	Entities   []db.Entity
 	TaskIDs    []int64
+	PlanIDs    []int64
 	Reminder   *ReminderInfo
 	Delegation *DelegationInfo
 }
@@ -127,9 +148,37 @@ func analyzeAndStore(ctx context.Context, cfg config.Config, store *db.Store, us
 		return nil, err
 	}
 	res := &IngestResult{EntryID: entryID, Day: day, Blocks: blocks, Entities: entities}
-	for _, b := range blocks {
-		if b.Aspect == "task" || (b.Aspect == "plan" && GuessDue(b.Content) != "") {
-			tid, err := store.AddTask(userID, entryID, b.Content, GuessDue(b.Content))
+	targets := analysis.Targets
+	for i, b := range blocks {
+		var target string
+		if i < len(targets) {
+			target = targets[i]
+		}
+		switch {
+		case b.Aspect == "task":
+			tid, err := store.AddTask(userID, entryID, b.Content, GuessDue(b.Content), target)
+			if err != nil {
+				return nil, err
+			}
+			res.TaskIDs = append(res.TaskIDs, tid)
+		case b.Aspect == "fact" && target != "" && target > day:
+			// Событие будущего («в пятницу встреча») — тоже план на тот день,
+			// иначе «я же говорил про пятницу» потеряется.
+			pid, err := store.AddPlan(userID, entryID, b.Content, target)
+			if err != nil {
+				return nil, err
+			}
+			res.PlanIDs = append(res.PlanIDs, pid)
+		case b.Aspect == "plan" && target != "":
+			// Намерение на конкретный день — в планы (с датой-целью).
+			pid, err := store.AddPlan(userID, entryID, b.Content, target)
+			if err != nil {
+				return nil, err
+			}
+			res.PlanIDs = append(res.PlanIDs, pid)
+		case b.Aspect == "plan" && GuessDue(b.Content) != "":
+			// План со сроком словами, но без точной даты — как раньше, в задачи.
+			tid, err := store.AddTask(userID, entryID, b.Content, GuessDue(b.Content), "")
 			if err != nil {
 				return nil, err
 			}
@@ -145,7 +194,7 @@ func analyzeAndStore(ctx context.Context, cfg config.Config, store *db.Store, us
 			if len(res.TaskIDs) > 0 {
 				taskID = res.TaskIDs[0]
 			} else {
-				tid, err := store.AddTask(userID, entryID, text, "")
+				tid, err := store.AddTask(userID, entryID, text, "", "")
 				if err != nil {
 					return nil, err
 				}

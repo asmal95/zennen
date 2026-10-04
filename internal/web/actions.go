@@ -51,7 +51,7 @@ func (s *Server) handleReminderNew(w http.ResponseWriter, r *http.Request) {
 		fail("Не понял «когда». Примеры: «через 2 часа», «в 15:30», «завтра в 9», «в пятницу вечером».")
 		return
 	}
-	tid, err := s.store.AddTask(id, 0, what, "")
+	tid, err := s.store.AddTask(id, 0, what, "", "")
 	if err != nil {
 		fail("Не сохранилось: " + err.Error())
 		return
@@ -94,7 +94,7 @@ func (s *Server) handleTaskNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if text := strings.TrimSpace(r.FormValue("text")); text != "" {
-		_, _ = s.store.AddTask(id, 0, text, services.GuessDue(text))
+		_, _ = s.store.AddTask(id, 0, text, services.GuessDue(text), "")
 	}
 	http.Redirect(w, r, "/tasks", http.StatusSeeOther)
 }

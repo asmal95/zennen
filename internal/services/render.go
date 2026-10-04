@@ -65,6 +65,20 @@ func RenderDay(day string, blocks []db.Block) string {
 		day, len(blocks), strings.Join(top, ", "), RenderBlocks(tail))
 }
 
+// RenderPlans — планы на день. Пусто — приглашение записать вечером.
+func RenderPlans(plans []db.Plan) string {
+	if len(plans) == 0 {
+		return "📌 На сегодня планов не записано. Вечером расскажи, что хочешь завтра, — утром напомню."
+	}
+	var b strings.Builder
+	b.WriteString("📌 <b>Планы на сегодня:</b>\n")
+	for _, p := range plans {
+		fmt.Fprintf(&b, "#%d — %s\n", p.ID, p.Text)
+	}
+	b.WriteString("\nЗакрыть вручную: /plandone &lt;id&gt;")
+	return b.String()
+}
+
 func RenderTasks(tasks []db.Task) string {
 	if len(tasks) == 0 {
 		return "✅ Открытых задач нет. Так держать!"

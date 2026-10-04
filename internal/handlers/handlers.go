@@ -75,6 +75,8 @@ const helpText = `🎙 <b>ИИ-Диктофон Дневника</b> (voice-firs
 /week — 7 дней
 /tasks — открытые задачи
 /done &lt;id&gt; — закрыть задачу
+/plans — планы по дням
+/plandone &lt;id&gt; — закрыть план
 /ideas — банк идей
 /energy [1–10] — записать энергию дня
 /person &lt;имя&gt; — всё про человека
@@ -156,6 +158,9 @@ func renderResult(prefix string, res *services.IngestResult) string {
 	}
 	if len(res.TaskIDs) > 0 {
 		fmt.Fprintf(&b, "\n\n✅ В задачи: %d (см. /tasks)", len(res.TaskIDs))
+	}
+	if len(res.PlanIDs) > 0 {
+		fmt.Fprintf(&b, "\n📌 В планы: %d (см. /plans)", len(res.PlanIDs))
 	}
 	if res.Reminder != nil {
 		fmt.Fprintf(&b, "\n⏰ Напомню: %s", res.Reminder.FireAt.Format("02.01 в 15:04"))
@@ -373,7 +378,7 @@ func (a *App) handleCallback(ctx context.Context, cb *models.CallbackQuery) {
 			a.send(ctx, chatID, "Запись уже удалена.")
 			return
 		}
-		tid, err := a.Store.AddTask(userID, entryID, text, services.GuessDue(text))
+		tid, err := a.Store.AddTask(userID, entryID, text, services.GuessDue(text), "")
 		if err != nil {
 			a.send(ctx, chatID, "❌ Не получилось создать задачу: "+err.Error())
 			return
@@ -567,6 +572,40 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 	case "/tasks":
 		tasks, _ := a.Store.OpenTasks(userID)
 		a.send(ctx, chatID, services.RenderTasks(tasks))
+	case "/plans":
+		plans, _ := a.Store.OpenPlans(userID, 30)
+		if len(plans) == 0 {
+			a.send(ctx, chatID, "📌 Открытых планов нет. Расскажи вечером, что хочешь завтра, — утром напомню.")
+			return
+		}
+		var b strings.Builder
+		b.WriteString("📌 <b>Планы:</b>\n")
+		lastDay := ""
+		for _, p := range plans {
+			if p.TargetDay != lastDay {
+				fmt.Fprintf(&b, "\n<i>%s</i>\n", p.TargetDay)
+				lastDay = p.TargetDay
+			}
+			fmt.Fprintf(&b, "#%d — %s\n", p.ID, p.Text)
+		}
+		b.WriteString("\nЗакрыть вручную: /plandone &lt;id&gt;")
+		a.send(ctx, chatID, b.String())
+	case "/plandone":
+		if len(parts) < 2 {
+			a.send(ctx, chatID, "Использование: /plandone &lt;id&gt; (см. /plans)")
+			return
+		}
+		pid, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			a.send(ctx, chatID, "Использование: /plandone &lt;id&gt; (см. /plans)")
+			return
+		}
+		ok, _ := a.Store.ClosePlan(userID, pid)
+		if ok {
+			a.send(ctx, chatID, "📌 План закрыт!")
+		} else {
+			a.send(ctx, chatID, "❌ Не нашёл такой план.")
+		}
 	case "/done":
 		if len(parts) < 2 {
 			a.send(ctx, chatID, "Использование: /done &lt;id&gt; (см. /tasks)")

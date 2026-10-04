@@ -13,15 +13,16 @@ ai-dictaphone-diary/
   cmd/bot/main.go            # точка входа: polling + планировщик (требует BOT_TOKEN и OPENAI_API_KEY, иначе exit)
   internal/
     config/config.go         # конфиг из .env (BOT_TOKEN, OPENAI_* incl. BASE_URL, TZ-дефолт, DB_PATH, ...); TZ персональный — в таблице users, не в конфиге
-    db/db.go                 # SQLite (modernc.org/sqlite, pure Go): entries/blocks/entities/tasks/reminders/delegations/energy/users/web_sessions/week_cache + миграции ALTER TABLE в Open()
+    db/db.go                 # SQLite (modernc.org/sqlite, pure Go): entries/blocks/entities/tasks/reminders/delegations/energy/users/web_sessions/week_cache/plans + миграции ALTER TABLE в Open()
     services/
       llm.go                 # NewLLMClient: OpenAI-совместимый клиент на OPENAI_BASE_URL
       stt.go                 # Whisper API; "" при ошибке, хендлер просит текстом
-      analyze.go             # AnalyzeFull: только LLM (блоки + entry_date); ошибка → ErrAnalyze. Промпт: systemPromptBase + PastStrs + weekdayTable
+      analyze.go             # AnalyzeFull: только LLM (блоки + entry_date + target_date); ошибка → ErrAnalyze. Промпт: systemPromptBase + PastStrs/FutureStrs + weekdayTable(Future). targetOverride: явные маркеры (завтра/послезавтра/дни недели) резолвит Go поверх LLM — LLM ошибался даже на «завтра» 3/3
       entities.go            # люди/проекты/места/даты/суммы/обещания (regex, RE2!)
       remind.go              # RemindIntentRe + ParseRemindAt («через N», «в H:MM», «завтра», части дня; границы — явными классами, НЕ \b)
       pipeline.go            # IngestText (анализ → дата → AddEntry → analyzeAndStore), ReanalyzeEntry (день сохраняется), ResolveEntryDate (клямп: прошлое ≤ года, не будущее)
       review.go              # BuildWeeklyReview: данные 7 дней → 1 LLM-вызов, plain text, ErrNoData если пусто
+      reconcile.go           # ReconcileDay: планы+задачи дня vs записи → JSON done/missed/report, статусы только из своих open-id
       people.go              # MatchName (стемминг падежей, префикс-не-подстрока) + EntityHistory для /person /project
       users.go               # UserLoc (зона юзера, фолбэки) + DigestDue (чистая функция диспетчера)
       energy.go              # EnergySparkline + EnergyKeyboard(день); колбэк "energy:ГГГГ-ММ-ДД:N" в handlers
@@ -40,7 +41,7 @@ ai-dictaphone-diary/
   AGENTS.md                  # этот файл
 ```
 
-Команды бота: `/today /day /notes /week /tasks /done /ideas /energy /person /project /delegations /search /export /delete_day /link /revoke /tz /help` + кнопки под разбором (✅/✏️/🗑), шкала энергии 1–10, кнопки зоны (tz:). Прод: `diarybot` + `diaryweb` под systemd, nginx `nen.zenai.space` → 127.0.0.1:8070 (сертификат certbot).
+Команды бота: `/today /day /notes /week /tasks /done /plans /plandone /ideas /energy /person /project /delegations /search /export /delete_day /link /revoke /tz /help` + кнопки под разбором (✅/✏️/🗑), шкала энергии 1–10, кнопки зоны (tz:). Прод: `diarybot` + `diaryweb` под systemd, nginx `nen.zenai.space` → 127.0.0.1:8070 (сертификат certbot).
 
 ## 2. Запуск и проверка (обязательно после правок)
 

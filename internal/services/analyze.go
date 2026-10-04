@@ -31,8 +31,13 @@ const systemPromptBase = `Ты — структуризатор личного �
 	`idea — озарение; emotion — чувства/состояние; fact — события; thought — размышления; ` +
 	`health/work/people/money/gratitude/decision — по смыслу; other — остальное. ` +
 	`Не выдумывай, сохраняй смысл, каждый блок 1-2 предложения. ` +
-	`Верни ТОЛЬКО JSON-объект: {"entry_date": ..., "blocks": [{"aspect": "...", "content": "..."}]}. ` +
+	`Сохраняй в тексте блока слова-даты из оригинала («завтра», «послезавтра», «в пятницу», «10 октября») как есть, не перефразируй их и не выбрасывай. ` +
+	`Верни ТОЛЬКО JSON-объект: {"entry_date": ..., "blocks": [{"aspect": "...", "content": "...", "target_date": ...}]}. ` +
 	`Поле entry_date: к какому числу относятся описываемые СОБЫТИЯ — "YYYY-MM-DD" или null, если события сегодняшние или дата не указана. ` +
+	`Поле target_date (только для aspect plan/task, остальным null): к какому дню относится намерение или действие — "YYYY-MM-DD" или null, если день не указан («когда-нибудь», «скоро», «надо бы» = null). ` +
+	`Правила target_date: «завтра» = %s; «послезавтра» = %s; день недели — строго из таблицы будущего: %s; ` +
+	`явная дата («10 октября») = такое число (если в этом году уже прошло — следующий год). ` +
+	`Примеры: «завтра хочу в бассейн» → plan + target_date; «надо завтра сдать отчёт» → task + target_date. ` +
 	`Правила даты: «вчера» = %s; «позавчера» = %s; день недели — строго из таблицы: %s; ` +
 	`явная дата («3 октября») = такое число текущего года в формате YYYY-MM-DD (если получилось будущее — прошлый год); ` +
 	`упоминание БУДУЩЕЙ даты как срока задачи («завтра сдать», «напомни в пятницу») НЕ меняет entry_date — ставь null; ` +
@@ -40,6 +45,39 @@ const systemPromptBase = `Ты — структуризатор личного �
 	`Сегодня %s.`
 
 var codeFenceRe = regexp.MustCompile("(?m)^```json|^```|```$")
+
+// Границы слов для кириллицы (RE2: \b ASCII-only, не работает).
+const ruBound = `[^а-яёa-z]`
+
+var (
+	reDayAfter  = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)послезавтра(?:` + ruBound + `|$)`)
+	reTomorrowW = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)завтра(?:` + ruBound + `|$)`)
+	reWeekdayW  = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)(понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресень[ея])(?:` + ruBound + `|$)`)
+)
+
+// targetOverride детерминированно резолвит явные относительные маркеры
+// в тексте ОДНОГО блока: послезавтра/завтра/дни недели.
+// LLM систематически ошибается даже на «завтра» (3/3 мимо в тесте),
+// поэтому явные маркеры — всегда Go, LLM — только для прочих формулировок.
+// Возвращает "" если маркеров нет.
+func targetOverride(content string, now time.Time) string {
+	if reDayAfter.MatchString(content) {
+		return now.AddDate(0, 0, 2).Format("2006-01-02")
+	}
+	if reTomorrowW.MatchString(content) {
+		return now.AddDate(0, 0, 1).Format("2006-01-02")
+	}
+	if m := reWeekdayW.FindStringSubmatch(strings.ToLower(content)); m != nil {
+		got := stemName(m[1]) // stemName из people.go: «среду» и «среда» → «сред»
+		for wd, name := range ruWeekdays {
+			if stemName(name) == got {
+				delta := (int(wd) - int(now.Weekday()) + 7) % 7
+				return now.AddDate(0, 0, delta).Format("2006-01-02")
+			}
+		}
+	}
+	return ""
+}
 
 var ruWeekdays = map[time.Weekday]string{
 	time.Monday: "понедельник", time.Tuesday: "вторник", time.Wednesday: "среда",
@@ -59,10 +97,29 @@ func weekdayTable() string {
 	return strings.Join(parts, ", ")
 }
 
-// Analysis — разбор текста: блоки аспектов + дата, к которой относятся события.
+// weekdayTableFuture — то же на 14 дней вперёд (для target_date).
+func weekdayTableFuture() string {
+	now := time.Now()
+	parts := make([]string, 0, 14)
+	seen := map[string]bool{}
+	for i := 0; i < 14; i++ {
+		d := now.AddDate(0, 0, i)
+		name := ruWeekdays[d.Weekday()]
+		if seen[name] {
+			continue // день недели уже есть (ближайший future)
+		}
+		seen[name] = true
+		parts = append(parts, name+"="+d.Format("2006-01-02"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Analysis — разбор текста: блоки аспектов + дата событий + даты-цели.
+// Targets[i] — target_date блока Blocks[i] ("" = день не указан).
 type Analysis struct {
 	Blocks    []db.Block
-	EntryDate string // "" = сегодня
+	EntryDate string
+	Targets   []string
 }
 
 // AnalyzeFull разбирает текст на блоки аспектов и определяет entry_date
@@ -82,7 +139,8 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 	}
 	today := TodayStr()
 	yesterday, dayBefore := PastStrs()
-	system := fmt.Sprintf(systemPromptBase, yesterday, dayBefore, weekdayTable(), today)
+	tomorrow, dayAfter := FutureStrs()
+	system := fmt.Sprintf(systemPromptBase, yesterday, dayBefore, weekdayTable(), tomorrow, dayAfter, weekdayTableFuture(), today)
 	client := NewLLMClient(apiKey, baseURL)
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model:       model,
@@ -103,8 +161,9 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 	var data struct {
 		EntryDate *string `json:"entry_date"`
 		Blocks    []struct {
-			Aspect  string `json:"aspect"`
-			Content string `json:"content"`
+			Aspect     string  `json:"aspect"`
+			Content    string  `json:"content"`
+			TargetDate *string `json:"target_date"`
 		} `json:"blocks"`
 	}
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {
@@ -114,6 +173,7 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 	if data.EntryDate != nil {
 		out.EntryDate = strings.TrimSpace(*data.EntryDate)
 	}
+	now := time.Now()
 	for _, b := range data.Blocks {
 		c := strings.TrimSpace(b.Content)
 		if c == "" {
@@ -124,6 +184,17 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 			a = "other"
 		}
 		out.Blocks = append(out.Blocks, db.Block{Aspect: a, Content: c})
+		t := ""
+		if b.TargetDate != nil && (a == "plan" || a == "task") {
+			t = strings.TrimSpace(*b.TargetDate)
+		}
+		t = ResolveTargetDate(t, now)
+		if a == "plan" || a == "task" || a == "fact" {
+			if ov := targetOverride(c, now); ov != "" {
+				t = ov // явный маркер в блоке — детерминированно поверх LLM
+			}
+		}
+		out.Targets = append(out.Targets, t)
 	}
 	if len(out.Blocks) == 0 {
 		return nil, fmt.Errorf("%w: no blocks", ErrAnalyze)

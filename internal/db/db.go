@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS tasks(
   due TEXT DEFAULT '',
   done INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
-  completed_at TEXT DEFAULT ''
+  completed_at TEXT DEFAULT '',
+  target_day TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_user_done ON tasks(user_id, done);
 CREATE TABLE IF NOT EXISTS entities(
@@ -106,6 +107,16 @@ CREATE TABLE IF NOT EXISTS users(
   last_evening_day TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plans(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  entry_id INTEGER REFERENCES entries(id),
+  text TEXT NOT NULL,
+  target_day TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plans_user_day ON plans(user_id, target_day, status);
 `
 
 type Store struct {
@@ -127,6 +138,7 @@ func Open(path string) (*Store, error) {
 	// Лёгкие миграции существующих БД: ошибка duplicate column — норма.
 	for _, m := range []string{
 		`ALTER TABLE tasks ADD COLUMN completed_at TEXT DEFAULT ''`,
+		`ALTER TABLE tasks ADD COLUMN target_day TEXT DEFAULT ''`,
 	} {
 		_, _ = database.Exec(m)
 	}
@@ -142,10 +154,18 @@ type Block struct {
 }
 
 type Task struct {
-	ID   int64
-	Text string
-	Due  string
-	Done bool
+	ID        int64
+	Text      string
+	Due       string
+	Done      bool
+	TargetDay string
+}
+
+type Plan struct {
+	ID        int64
+	Text      string
+	TargetDay string
+	Status    string
 }
 
 type Delegation struct {
@@ -244,10 +264,10 @@ func (s *Store) AddEntities(entryID, userID int64, day string, entities []Entity
 	return nil
 }
 
-func (s *Store) AddTask(userID, entryID int64, text, due string) (int64, error) {
+func (s *Store) AddTask(userID, entryID int64, text, due, targetDay string) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO tasks(user_id, entry_id, text, due, done, created_at) VALUES(?,?,?,?,0,?)`,
-		userID, entryID, text, due, time.Now().Format(time.RFC3339))
+		`INSERT INTO tasks(user_id, entry_id, text, due, done, created_at, target_day) VALUES(?,?,?,?,0,?,?)`,
+		userID, entryID, text, due, time.Now().Format(time.RFC3339), targetDay)
 	if err != nil {
 		return 0, err
 	}
@@ -303,7 +323,7 @@ func (s *Store) WeekBlocks(userID int64, days []string) ([]Block, error) {
 }
 
 func (s *Store) OpenTasks(userID int64) ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, text, due, done FROM tasks WHERE user_id=? AND done=0 ORDER BY id`, userID)
+	rows, err := s.db.Query(`SELECT id, text, due, done, target_day FROM tasks WHERE user_id=? AND done=0 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +331,7 @@ func (s *Store) OpenTasks(userID int64) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done, &t.TargetDay); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -321,7 +341,7 @@ func (s *Store) OpenTasks(userID int64) ([]Task, error) {
 
 func (s *Store) DoneTasksSince(userID int64, since time.Time) ([]Task, error) {
 	rows, err := s.db.Query(
-		`SELECT id, text, due, done FROM tasks WHERE user_id=? AND done=1 AND completed_at >= ? ORDER BY id`,
+		`SELECT id, text, due, done, target_day FROM tasks WHERE user_id=? AND done=1 AND completed_at >= ? ORDER BY id`,
 		userID, since.Format(time.RFC3339))
 	if err != nil {
 		return nil, err
@@ -330,7 +350,7 @@ func (s *Store) DoneTasksSince(userID int64, since time.Time) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done, &t.TargetDay); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -565,7 +585,7 @@ func (s *Store) EntryText(userID, entryID int64) (string, bool, error) {
 
 // TasksByEntry — все задачи одной записи со статусами (для таймлайна).
 func (s *Store) TasksByEntry(entryID int64) ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, text, due, done FROM tasks WHERE entry_id=? ORDER BY id`, entryID)
+	rows, err := s.db.Query(`SELECT id, text, due, done, target_day FROM tasks WHERE entry_id=? ORDER BY id`, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -573,7 +593,7 @@ func (s *Store) TasksByEntry(entryID int64) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done, &t.TargetDay); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -602,7 +622,7 @@ func (s *Store) EntityValues(userID int64, etype string, limit int) ([]string, e
 
 // OpenTasksByEntry — открытые задачи одной записи (для кнопки «В задачу»: дубли не плодим).
 func (s *Store) OpenTasksByEntry(entryID int64) ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, text, due, done FROM tasks WHERE entry_id=? AND done=0 ORDER BY id`, entryID)
+	rows, err := s.db.Query(`SELECT id, text, due, done, target_day FROM tasks WHERE entry_id=? AND done=0 ORDER BY id`, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +630,7 @@ func (s *Store) OpenTasksByEntry(entryID int64) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done, &t.TargetDay); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -980,6 +1000,102 @@ func (s *Store) MarkDigest(userID int64, kind, day string) error {
 		col = "last_evening_day"
 	}
 	_, err := s.db.Exec(fmt.Sprintf(`UPDATE users SET %s=? WHERE user_id=?`, col), day, userID)
+	return err
+}
+
+// AddPlan сохраняет намерение на конкретный день (план, не задача:
+// закрывается сверкой или вручную через /plandone).
+func (s *Store) AddPlan(userID, entryID int64, text, targetDay string) (int64, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO plans(user_id, entry_id, text, target_day, status, created_at) VALUES(?,?,?,?,'open',?)`,
+		userID, entryID, text, targetDay, time.Now().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// PlansForDay — планы на день (по умолчанию открытые; done тоже можно запросить).
+func (s *Store) PlansForDay(userID int64, day string, onlyOpen bool) ([]Plan, error) {
+	q := `SELECT id, text, target_day, status FROM plans WHERE user_id=? AND target_day=?`
+	if onlyOpen {
+		q += ` AND status='open'`
+	}
+	q += ` ORDER BY id`
+	rows, err := s.db.Query(q, userID, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Plan
+	for rows.Next() {
+		var p Plan
+		if err := rows.Scan(&p.ID, &p.Text, &p.TargetDay, &p.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// TasksForDay — задачи на день (по target_day; done — любые).
+func (s *Store) TasksForDay(userID int64, day string) ([]Task, error) {
+	rows, err := s.db.Query(
+		`SELECT id, text, due, done, target_day FROM tasks WHERE user_id=? AND target_day=? ORDER BY id`,
+		userID, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done, &t.TargetDay); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// OpenPlans — все открытые планы по датам (для /plans).
+func (s *Store) OpenPlans(userID int64, limit int) ([]Plan, error) {
+	rows, err := s.db.Query(
+		`SELECT id, text, target_day, status FROM plans WHERE user_id=? AND status='open' ORDER BY target_day, id LIMIT ?`,
+		userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Plan
+	for rows.Next() {
+		var p Plan
+		if err := rows.Scan(&p.ID, &p.Text, &p.TargetDay, &p.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ClosePlan закрывает план вручную (/plandone).
+func (s *Store) ClosePlan(userID, planID int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE plans SET status='done' WHERE id=? AND user_id=? AND status='open'`,
+		planID, userID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// SetPlanStatus ставит статус по итогам сверки (done/missed).
+func (s *Store) SetPlanStatus(userID, planID int64, status string) error {
+	if status != "done" && status != "missed" {
+		return fmt.Errorf("bad plan status: %s", status)
+	}
+	_, err := s.db.Exec(`UPDATE plans SET status=? WHERE id=? AND user_id=? AND status='open'`,
+		status, planID, userID)
 	return err
 }
 

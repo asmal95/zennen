@@ -40,12 +40,21 @@ func Start(ctx context.Context, b *bot.Bot, cfg config.Config, store *db.Store) 
 			if due, _ := services.DigestDue(now, cfg.MorningHour, usr.LastMorningDay); due {
 				blocks, _ := store.DayBlocks(u, day)
 				tasks, _ := store.OpenTasks(u)
-				text := fmt.Sprintf("☀️ Доброе утро! Сегодня уже %d записей.\n\n%s\n\nНаговори или напиши планы на день 🎙",
-					len(blocks), services.RenderTasks(tasks))
+				plansToday, _ := store.PlansForDay(u, day, true)
+				text := fmt.Sprintf("☀️ Доброе утро!\n\n%s\n\nСегодня уже %d записей.\n\n%s\n\nНаговори или напиши планы на день 🎙",
+					services.RenderPlans(plansToday), len(blocks), services.RenderTasks(tasks))
 				if _, err := b.SendMessage(context.Background(), &bot.SendMessageParams{
 					ChatID: u, Text: text, ParseMode: "HTML",
 				}); err == nil {
 					_ = store.MarkDigest(u, "morning", day)
+				}
+				// Отчёт за вчера: сверка планов с фактом (1 LLM-вызов, только если было что сверять).
+				// Отдельным plain-сообщением: в отчёте может быть сырой "<", роняющий HTML-парсинг.
+				yday := now.AddDate(0, 0, -1).Format("2006-01-02")
+				if report, err := services.ReconcileDay(context.Background(), cfg, store, u, yday); err == nil && report != "" {
+					_, _ = b.SendMessage(context.Background(), &bot.SendMessageParams{
+						ChatID: u, Text: "📊 Итоги вчера (" + yday + "):\n\n" + report,
+					})
 				}
 			}
 			if due, _ := services.DigestDue(now, cfg.EveningHour, usr.LastEveningDay); due {
