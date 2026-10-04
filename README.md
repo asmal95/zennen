@@ -41,7 +41,9 @@ go run ./cmd/bot
 
 Конфиг (`.env`): `BOT_TOKEN`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` (дефолт — OpenRouter `https://openrouter.ai/api/v1`, слаги с префиксом: `openai/gpt-4o-mini`, `openai/whisper-large-v3-turbo`), `OPENAI_MODEL`, `OPENAI_STT_MODEL`, `TZ`, `DB_PATH`, `MORNING_HOUR`, `EVENING_HOUR`. Для прямого OpenAI поменяй BaseURL на `https://api.openai.com/v1` и слаги на `gpt-4o-mini` / `whisper-1`.
 
-Прод: systemd-юнит `diarybot` (`Restart=always`, enabled) — `systemctl restart diarybot`, логи `journalctl -u diarybot`. Бэкапы SQLite — автоматически каждый день в 3:00 в `data/backups/` (ротация 14 дней).
+Прод: systemd-юниты `diarybot` и `diaryweb` (`Restart=always`, enabled).
+Веб-версия — https://nen.zenai.space (вход по одноразовой ссылке из команды `/link` в боте, отзыв — `/revoke`).
+Бэкапы SQLite — автоматически каждый день в 3:00 в `data/backups/` (ротация 14 дней).
 
 ## Приватность
 

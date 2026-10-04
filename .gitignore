@@ -3,3 +3,4 @@
 /data/*.db-journal
 /data/backups/
 .env
+/diaryweb

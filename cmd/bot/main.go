@@ -36,8 +36,13 @@ func main() {
 		log.Fatalf("db open: %v", err)
 	}
 	defer store.Close()
+	sess, err := db.Open(cfg.SessDBPath)
+	if err != nil {
+		log.Fatalf("sessions db open: %v", err)
+	}
+	defer sess.Close()
 
-	app := handlers.NewApp(cfg, store)
+	app := handlers.NewApp(cfg, store, sess)
 	b, err := bot.New(cfg.BotToken, bot.WithDefaultHandler(app.Handle))
 	if err != nil {
 		log.Fatalf("bot init: %v", err)

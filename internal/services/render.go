@@ -16,6 +16,9 @@ var names = map[string]string{
 
 func em(a string) string { return EmojiFor(a) } // карта — в export.go
 
+// AspectName — русское имя аспекта (для веба).
+func AspectName(a string) string { return nm(a) }
+
 func nm(a string) string {
 	if n, ok := names[a]; ok {
 		return n

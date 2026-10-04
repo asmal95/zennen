@@ -1,0 +1,6 @@
+{{define "tasks"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Задачи</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>✅ Открытые ({{len .Open}})</h1>
+{{range .Open}}<div class="task">#{{.ID}} — {{.Text}}{{if .Due}} <span class="muted">({{.Due}})</span>{{end}}</div>{{else}}<p class="muted">Открытых задач нет 🎉</p>{{end}}
+<h2>Выполненные за 30 дней ({{len .Done}})</h2>
+{{range .Done}}<div class="task done">#{{.ID}} — {{.Text}}</div>{{end}}
+</div></body></html>{{end}}

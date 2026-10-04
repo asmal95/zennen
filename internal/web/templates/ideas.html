@@ -1,0 +1,4 @@
+{{define "ideas"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Идеи</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>💡 Банк идей ({{len .Rows}})</h1>
+{{range .Rows}}<div class="note"><div class="t">{{.Day}}</div><div>{{.Content}}</div></div>{{else}}<p class="muted">Идей пока нет.</p>{{end}}
+</div></body></html>{{end}}

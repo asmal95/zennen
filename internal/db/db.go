@@ -1,7 +1,10 @@
 package db
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -82,6 +85,19 @@ CREATE TABLE IF NOT EXISTS energy(
   created_at TEXT NOT NULL,
   PRIMARY KEY (user_id, day)
 );
+CREATE TABLE IF NOT EXISTS web_sessions(
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS week_cache(
+  user_id INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
 `
 
 type Store struct {
@@ -110,6 +126,24 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// OpenReadOnly открывает БД только для чтения (для веб-вьювера):
+// ни схема, ни миграции не применяются — файл физически не меняется.
+func OpenReadOnly(path string) (*Store, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	database, err := sql.Open("sqlite", "file:"+abs+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	if err := database.Ping(); err != nil {
+		database.Close()
+		return nil, err
+	}
+	return &Store{Path: path, db: database}, nil
+}
 
 type Block struct {
 	Aspect  string
@@ -680,6 +714,148 @@ func (s *Store) WeekEnergy(userID int64, days []string) (map[string]int, error) 
 			return nil, err
 		}
 		out[day] = v
+	}
+	return out, rows.Err()
+}
+
+func webTokenHash(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+// CreateWebToken выпускает токен сессии (сырой — только в ответ пользователю,
+// в БД лежит только SHA-256). ttl: 15 минут для magic link, 30 дней для сессии.
+func (s *Store) CreateWebToken(userID int64, ttl time.Duration) (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(raw)
+	now := time.Now()
+	_, err := s.db.Exec(
+		`INSERT INTO web_sessions(token_hash, user_id, created_at, expires_at) VALUES(?,?,?,?)`,
+		webTokenHash(token), userID, now.Format(time.RFC3339), now.Add(ttl).Format(time.RFC3339))
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// ConsumeWebToken проверяет токен, удаляет его (одноразовый) и отдаёт user_id.
+// Просроченные заодно подчищает. ok=false — токена нет или истёк.
+func (s *Store) ConsumeWebToken(raw string) (int64, bool, error) {
+	h := webTokenHash(raw)
+	var userID int64
+	var expires string
+	err := s.db.QueryRow(`SELECT user_id, expires_at FROM web_sessions WHERE token_hash=?`, h).Scan(&userID, &expires)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE token_hash=?`, h)
+	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE expires_at < ?`, time.Now().Format(time.RFC3339))
+	t, err := time.Parse(time.RFC3339, expires)
+	if err != nil || !t.After(time.Now()) {
+		return 0, false, nil
+	}
+	return userID, true, nil
+}
+
+// LookupWebSession проверяет сессионный cookie-токен (без удаления).
+func (s *Store) LookupWebSession(raw string) (int64, bool, error) {
+	var userID int64
+	var expires string
+	err := s.db.QueryRow(`SELECT user_id, expires_at FROM web_sessions WHERE token_hash=?`,
+		webTokenHash(raw)).Scan(&userID, &expires)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	t, err := time.Parse(time.RFC3339, expires)
+	if err != nil || !t.After(time.Now()) {
+		return 0, false, nil
+	}
+	return userID, true, nil
+}
+
+// RevokeWebSessions отзывает все токены и сессии пользователя.
+func (s *Store) RevokeWebSessions(userID int64) error {
+	_, err := s.db.Exec(`DELETE FROM web_sessions WHERE user_id=?`, userID)
+	return err
+}
+
+// WeekCacheGet отдаёт кэшированный текст недельного ревью за день.
+func (s *Store) WeekCacheGet(userID int64, day string) (string, bool, error) {
+	var text string
+	err := s.db.QueryRow(`SELECT text FROM week_cache WHERE user_id=? AND day=?`, userID, day).Scan(&text)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return text, true, nil
+}
+
+// WeekCacheSet сохраняет текст ревью (повторный показ в тот же день бесплатен).
+func (s *Store) WeekCacheSet(userID int64, day, text string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO week_cache(user_id, day, text, created_at) VALUES(?,?,?,?)
+		 ON CONFLICT(user_id, day) DO UPDATE SET text=excluded.text, created_at=excluded.created_at`,
+		userID, day, text, time.Now().Format(time.RFC3339))
+	return err
+}
+
+// DayList возвращает дни пользователя с записями, свежие первыми.
+func (s *Store) DayList(userID int64, limit int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT day FROM entries WHERE user_id=? ORDER BY day DESC LIMIT ?`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// DayEntries — заметки одного дня с разборами (для веба и экспорта дня).
+func (s *Store) DayEntries(userID int64, day string) ([]ExportNote, error) {
+	rows, err := s.db.Query(
+		`SELECT e.id, e.day, e.kind, e.transcript, e.created_at, b.aspect, b.content
+		 FROM entries e LEFT JOIN blocks b ON b.entry_id = e.id
+		 WHERE e.user_id = ? AND e.day = ? ORDER BY e.id, b.id`,
+		userID, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ExportNote
+	var lastID int64 = -1
+	for rows.Next() {
+		var id int64
+		var d, kind, transcript, createdAt string
+		var aspect, content sql.NullString
+		if err := rows.Scan(&id, &d, &kind, &transcript, &createdAt, &aspect, &content); err != nil {
+			return nil, err
+		}
+		if id != lastID {
+			out = append(out, ExportNote{Day: d, Kind: kind, Transcript: transcript, CreatedAt: createdAt})
+			lastID = id
+		}
+		if aspect.Valid {
+			last := &out[len(out)-1]
+			last.Blocks = append(last.Blocks, Block{Aspect: aspect.String, Content: content.String, Day: d})
+		}
 	}
 	return out, rows.Err()
 }

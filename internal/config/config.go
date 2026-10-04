@@ -17,6 +17,9 @@ type Config struct {
 	TZ            string
 	MorningHour   int
 	EveningHour   int
+	WebBaseURL    string
+	WebListen     string
+	SessDBPath    string
 }
 
 func getenv(key, def string) string {
@@ -50,5 +53,8 @@ func Load() Config {
 		TZ:            getenv("TZ", "Europe/Moscow"),
 		MorningHour:   getenvInt("MORNING_HOUR", 9),
 		EveningHour:   getenvInt("EVENING_HOUR", 21),
+		WebBaseURL:    getenv("WEB_BASE_URL", "https://nen.zenai.space"),
+		WebListen:     getenv("WEB_LISTEN", "127.0.0.1:8070"),
+		SessDBPath:    getenv("SESS_DB_PATH", "data/sessions.db"),
 	}
 }

@@ -35,7 +35,7 @@
 ## Фаза 3 — Система (месяц+)
 - [ ] Локальный режим приватности (faster-whisper + Ollama)
 - [ ] Общий дневник / семейный бот
-- [ ] Веб-ридер истории (read-only timeline по дням)
+- [x] Веб-вьювер `WEB.md`: https://nen.zenai.space (Go stdlib + nginx + Let's Encrypt, magic link `/link` + `/revoke`, read-only v1, diary.db read-only + sessions.db отдельно, ревью с кэшем). Действия (v2) — отдельное решение
 - [ ] Бэкапы + шифрование at rest
 
 ## Фаза 4 — Внешние агенты-исполнители (отдельный проект, здесь только интерфейс)

@@ -25,15 +25,17 @@ import (
 type App struct {
 	Cfg   config.Config
 	Store *db.Store
+	Sess  *db.Store // sessions.db: веб-сессии (боту принадлежит на запись)
 	Bot   *bot.Bot
 
 	mu          sync.Mutex
 	pendingEdit map[int64]int64 // userID → entryID: ждём исправленный текст
+	lastLink    map[int64]time.Time
 }
 
-// NewApp конструирует App (карта pendingEdit требует инициализации).
-func NewApp(cfg config.Config, store *db.Store) *App {
-	return &App{Cfg: cfg, Store: store, pendingEdit: map[int64]int64{}}
+// NewApp конструирует App (карты требуют инициализации).
+func NewApp(cfg config.Config, store, sess *db.Store) *App {
+	return &App{Cfg: cfg, Store: store, Sess: sess, pendingEdit: map[int64]int64{}, lastLink: map[int64]time.Time{}}
 }
 
 func (a *App) takePendingEdit(userID int64) (int64, bool) {
@@ -76,6 +78,8 @@ const helpText = `🎙 <b>ИИ-Диктофон Дневника</b> (voice-firs
 /search &lt;запрос&gt; — поиск
 /export [ГГГГ-ММ] — Markdown дневника за месяц файлом
 /delete_day [ГГГГ-ММ-ДД] — удалить день (по умолчанию сегодня)
+/link — ссылка на веб-версию дневника
+/revoke — отозвать все веб-сессии
 /help — это сообщение
 
 Под каждым разбором кнопки: ✅ в задачу, ✏️ исправить текст, 🗑 удалить запись.
@@ -606,6 +610,28 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 			Document: &models.InputFileUpload{Filename: "diary-" + month + ".md", Data: bytes.NewReader([]byte(doc))},
 			Caption:  fmt.Sprintf("📦 Дневник за %s: заметок %d", month, len(notes)),
 		})
+	case "/link":
+		a.mu.Lock()
+		last, seen := a.lastLink[userID]
+		if seen && time.Since(last) < time.Minute {
+			a.mu.Unlock()
+			a.send(ctx, chatID, "⏳ Ссылку можно просить не чаще раза в минуту. Подожди немного.")
+			return
+		}
+		a.lastLink[userID] = time.Now()
+		a.mu.Unlock()
+		token, err := a.Sess.CreateWebToken(userID, 15*time.Minute)
+		if err != nil {
+			a.send(ctx, chatID, "❌ Не получилось выпустить ссылку: "+err.Error())
+			return
+		}
+		a.send(ctx, chatID, "🔗 Твоя ссылка на веб-дневник (одноразовая, 15 минут):\n"+a.Cfg.WebBaseURL+"/r/"+token)
+	case "/revoke":
+		if err := a.Sess.RevokeWebSessions(userID); err != nil {
+			a.send(ctx, chatID, "❌ Не получилось отозвать: "+err.Error())
+			return
+		}
+		a.send(ctx, chatID, "🔒 Все веб-сессии отозваны. Новая ссылка — по /link.")
 	case "/search":
 		if arg == "" {
 			a.send(ctx, chatID, "Использование: /search &lt;запрос&gt;")

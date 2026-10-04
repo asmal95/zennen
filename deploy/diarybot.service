@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Diary Telegram Bot (diarybot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/projects/ai-dictaphone-diary
+ExecStart=/root/projects/ai-dictaphone-diary/diarybot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

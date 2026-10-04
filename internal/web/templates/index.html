@@ -1,0 +1,8 @@
+{{define "index"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Дневник</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>🎙 Дневник</h1>
+{{range .Days}}<div class="day"><h2>📅 {{.Day}}{{if .HasEnergy}} <span class="energy">· {{.Energy}}/10</span>{{end}}</h2>
+{{range .Notes}}<div class="note"><div class="t">{{if eq .Kind "voice"}}🎧{{else}}📝{{end}} {{hm .CreatedAt}}</div>
+{{if .Transcript}}<blockquote>{{.Transcript}}</blockquote>{{end}}
+{{range .Blocks}}<div class="blk">{{emoji .Aspect}} <span class="asp">{{aspect .Aspect}}</span>: {{.Content}}</div>{{end}}</div>{{end}}</div>
+{{else}}<p class="muted">Пока пусто. Наговори что-нибудь боту 🎙</p>{{end}}
+</div></body></html>{{end}}

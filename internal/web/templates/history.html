@@ -1,0 +1,10 @@
+{{define "history"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Label}}</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>{{.Icon}} {{.Label}}</h1>
+<form class="s" method="get"><input type="text" name="q" value="{{.Q}}" placeholder="Имя или #тег…"><button>Найти</button></form>
+{{if .Found}}
+{{if .Values}}<p class="muted">Нашёл как: {{range .Values}}{{.}} {{end}}</p>{{end}}
+{{range .Hits}}<h2>📅 {{.Day}}</h2>
+{{range .Blocks}}<div class="blk">{{emoji .Aspect}} <span class="asp">{{aspect .Aspect}}</span>: {{.Content}}</div>{{end}}
+{{else}}<p class="muted">Ничего не нашёл. Упомяни в записи — и история начнёт собираться.</p>{{end}}
+{{end}}
+</div></body></html>{{end}}
