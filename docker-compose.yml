@@ -1,0 +1,19 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      DB_PATH: /app/data/diary.db
+    restart: unless-stopped
+  # V2: раскомментировать для Postgres + pgvector
+  # db:
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     POSTGRES_PASSWORD: diary
+  #     POSTGRES_DB: diary
+  #   volumes:
+  #     - pgdata:/app/data
+# volumes:
+#   pgdata:

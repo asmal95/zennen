@@ -1,0 +1,100 @@
+# AGENTS.md — инструкция для агента (ИИ-Диктофон Дневника)
+
+Telegram-бот «дневник-диктофон» на **Go**: пользователь каждый день излагает мысли
+**голосом или текстом** (голос — основной способ, текст — равноправный, не fallback),
+а бот автоматически ведёт журнал: заметки → разбор по аспектам + дата событий →
+сущности → задачи/напоминания → карточки делегирования. Исполнения задач в ядре НЕТ —
+только структура и память, внешние агенты подключаются позже плагинами.
+
+## 1. Структура
+
+```
+ai-dictaphone-diary/
+  cmd/bot/main.go            # точка входа: polling + планировщик (требует BOT_TOKEN и OPENAI_API_KEY, иначе exit)
+  internal/
+    config/config.go         # конфиг из .env (BOT_TOKEN, OPENAI_* incl. BASE_URL, TZ, DB_PATH, ...)
+    db/db.go                 # SQLite (modernc.org/sqlite, pure Go): entries/blocks/entities/tasks/reminders/delegations/energy + миграции ALTER TABLE в Open()
+    services/
+      llm.go                 # NewLLMClient: OpenAI-совместимый клиент на OPENAI_BASE_URL
+      stt.go                 # Whisper API; "" при ошибке, хендлер просит текстом
+      analyze.go             # AnalyzeFull: только LLM (блоки + entry_date); ошибка → ErrAnalyze. Промпт: systemPromptBase + PastStrs + weekdayTable
+      entities.go            # люди/проекты/места/даты/суммы/обещания (regex, RE2!)
+      remind.go              # RemindIntentRe + ParseRemindAt («через N», «в H:MM», «завтра», части дня; границы — явными классами, НЕ \b)
+      pipeline.go            # IngestText (анализ → дата → AddEntry → analyzeAndStore), ReanalyzeEntry (день сохраняется), ResolveEntryDate (клямп: прошлое ≤ года, не будущее)
+      review.go              # BuildWeeklyReview: данные 7 дней → 1 LLM-вызов, plain text, ErrNoData если пусто
+      people.go              # MatchName (стемминг падежей, префикс-не-подстрока) + EntityHistory для /person /project
+      energy.go              # EnergySparkline + EnergyKeyboard(день); колбэк "energy:ГГГГ-ММ-ДД:N" в handlers
+      delegate.go            # DelegationCard + AgentPlugin (NoOp/Calendar-заглушки, без исполнения)
+      render.go              # RenderBlocks/RenderDay/RenderTasks (HTML); EmojiFor живёт в export.go
+      export.go              # EmojiFor + RenderExportMarkdown (Obsidian/Notion)
+    handlers/handlers.go     # приём voice/audio/кружков/text + команды + колбэки (task:/edit:/del:/del_yes/del_no/energy:, pendingEdit в памяти со сбросом на команду/голос)
+    scheduler/scheduler.go   # cron: утро / вечер (с кнопками энергии) + ежеминутно due-reminders + ежедневно 3:00 DailyBackup (VACUUM INTO, ротация 14)
+  archive/python-bot/        # первый прототип. НЕ править, только смотреть как референс.
+  data/                      # diary.db + backups/ — рантайм, НЕ коммитить, не читать без нужды
+  .env                       # секреты — НЕ коммитить (в .gitignore)
+  CONCEPT.md / ROADMAP.md / README.md  # доки концепции, плана и пользователя
+  Dockerfile / docker-compose.yml / .env.example / go.mod / diarybot(бинарь, в .gitignore)
+  AGENTS.md                  # этот файл
+```
+
+Команды бота: `/today /day /notes /week /tasks /done /ideas /energy /person /project /delegations /search /export /delete_day /help` + кнопки под разбором (✅/✏️/🗑) и шкала энергии 1–10.
+
+## 2. Запуск и проверка (обязательно после правок)
+
+```sh
+go vet ./... && go build -o diarybot ./cmd/bot && echo OK   # бинарь — в корень проекта (в .gitignore)
+```
+
+Прод-бот крутится под systemd (`/etc/systemd/system/diarybot.service`,
+`WorkingDirectory` = корень проекта, `Restart=always`, enabled):
+
+```sh
+systemctl restart diarybot   # после сборки нового бинаря
+systemctl is-active diarybot && journalctl -u diarybot -n 5
+```
+
+- НЕ запускать второй экземпляр через `go run`/`nohup` рядом с сервисом — два polling-процесса на один токен конфликтуют.
+- Живые проверки — временным `tmpcheck/main.go` (каталог моделей OpenRouter, AnalyzeFull, транскрипция семпла, IngestText на `/tmp/*.db`), потом **удалить `tmpcheck/`**. Токены только из `.env` через `config.Load()` — никогда в командной строке.
+- `BOT_TOKEN`, `OPENAI_API_KEY` и весь `.env` никогда не коммитить и не показывать пользователю. `data/` (БД с личными записями) и бинарь тоже вне git (см. `.gitignore`).
+
+## 3. Git
+
+- Ветки/пуш — по указанию пользователя (remote он даст отдельно). Коммиты: короткие, по-русски или по-английски, в стиле репо.
+- Перед коммитом: `gofmt -l` чисто, `go vet` чисто, сборка ок, `git status` — убедиться, что нет `.env`, `data/`, бинаря, `tmpcheck/`.
+- Секреты в истории искать так: `grep -rni "sk-or-\|AAGT" --include="*.go" --include="*.md" .` (исключая `.env`, которого в репо нет).
+
+## 4. Грабли (не наступать повторно)
+
+- **Regex — только RE2**: в Go нет lookahead `(?=...)` / lookbehind. Плюс `\b` — ASCII-only и НЕ работает вокруг кириллицы (ловили на «через 1 час» и «позавтракать»): границы слов — явными классами `[^а-яёА-ЯЁa-zA-Z0-9]`.
+- **`modernc.org/sqlite` собирается минутами** при первой сборке (тяжёлый кодген).
+  Это норма; повторные сборки кэшируются. Не «чинить» заменой драйвера без спроса.
+- Go-toolchain в окружении может быть не на PATH (ставился в `/tmp/go`). Если `go`
+  не найден — искать там, прежде чем переустанавливать.
+- Ответы бота — `ParseModeHTML`: пользовательский текст и вывод LLM вставлять как есть нельзя
+  без экранирования там, где он может содержать `<>&` (превью и разборы сейчас вставляются
+  сырыми — известное упрощение MVP, правится при жалобах на битый HTML). Ревью недели —
+  всегда plain text именно поэтому.
+- Сырьё (`entries`) пишется один раз; правится только явным исправлением пользователя
+  (`UpdateTranscript` + `ClearDerived` + переразбор), удаляется только явным удалением
+  (`DeleteEntry`/`DeleteDay` с каскадом: блоки/сущности/открытые задачи/несработавшие
+  напоминания/proposed-делегации; выполненные задачи — история, не трогать).
+- Делегирование: только карточка `proposed` + stub-ответ плагина. Никаких реальных
+  внешних вызовов из ядра. Подтверждение «да, поручи» — отдельная задача (Фаза 4).
+- Текст бота не должен обещать несделанного (ловили на «подтверди — и агент заберёт»):
+  сверять формулировки с фактом кода.
+
+## 5. Таксономия аспектов (фиксирована)
+
+`fact thought plan task idea emotion health work people money gratitude decision other`
+— менять список только вместе с `CONCEPT.md` §3 и промптом в `analyze.go`.
+
+## 6. Доки
+
+- Поведение меняешь → обнови `CONCEPT.md` (что) + `ROADMAP.md` (статус фазы) + `README.md` (если видно пользователю).
+- `archive/python-bot/` — история, туда ничего не писать.
+
+## 7. Стиль работы
+
+- Отвечать пользователю по-русски, коротко, по делу.
+- Проверять сборку `go vet + go build` после любых правок `.go`-файлов и писать итог по факту прогона.
+- Без опроса: вопросы задавать только если без ответа нельзя двигаться; иначе — решение + обоснование.
