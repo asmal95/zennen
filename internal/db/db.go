@@ -639,7 +639,7 @@ func (s *Store) OpenTasksByEntry(entryID int64) ([]Task, error) {
 }
 
 // ClearDerived удаляет производные записи: блоки, сущности, открытые задачи
-// с их несработавшими напоминаниями, proposed-делегации.
+// с их несработавшими напоминаниями, открытые планы, proposed-делегации.
 // Выполненные задачи и ушедшие в работу делегации НЕ трогаем — это история.
 func (s *Store) ClearDerived(entryID, userID int64) error {
 	queries := []struct {
@@ -648,6 +648,7 @@ func (s *Store) ClearDerived(entryID, userID int64) error {
 	}{
 		{`DELETE FROM reminders WHERE sent=0 AND task_id IN (SELECT id FROM tasks WHERE entry_id=? AND done=0)`, []any{entryID}},
 		{`DELETE FROM tasks WHERE entry_id=? AND user_id=? AND done=0`, []any{entryID, userID}},
+		{`DELETE FROM plans WHERE entry_id=? AND user_id=? AND status='open'`, []any{entryID, userID}},
 		{`DELETE FROM blocks WHERE entry_id=?`, []any{entryID}},
 		{`DELETE FROM entities WHERE entry_id=?`, []any{entryID}},
 		{`DELETE FROM delegations WHERE entry_id=? AND status='proposed'`, []any{entryID}},

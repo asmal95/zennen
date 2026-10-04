@@ -87,10 +87,10 @@ func targetOverride(content string, now time.Time) string {
 	return ""
 }
 
-// messageAnchor ищет в ВСЁМ тексте первый явный якорь дня
+// MessageAnchor ищет в ВСЁМ тексте первый явный якорь дня
 // (послезавтра → завтра → день недели → точная дата).
 // Голые «утром/вечером» якорем НЕ считаются — они наследуют его.
-func messageAnchor(text string, now time.Time) string {
+func MessageAnchor(text string, now time.Time) string {
 	if reDayAfter.MatchString(text) {
 		return now.AddDate(0, 0, 2).Format("2006-01-02")
 	}
@@ -146,6 +146,21 @@ func atoi(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// EffectiveTarget — детерминированная дата-цель блока поверх ответа LLM:
+// явный маркер в блоке (targetOverride) либо наследование якоря сообщения
+// (LLM перефразирует «вечером» прочь и выдумывает даты — ловили 10-03
+// вместо 10-05). Наследование — только plan/task: факты прошлого не тянем.
+func EffectiveTarget(aspect, content, fullText, anchor string, now time.Time) string {
+	if ov := targetOverride(content, now); ov != "" {
+		return ov
+	}
+	if anchor != "" && (aspect == "plan" || aspect == "task") &&
+		!hasDateAnchor(content) && reDaypartW.MatchString(fullText) {
+		return anchor
+	}
+	return ""
 }
 
 // hasDateAnchor — в тексте есть явный якорь дня (не голое время суток).
@@ -253,7 +268,7 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 		out.EntryDate = strings.TrimSpace(*data.EntryDate)
 	}
 	now := time.Now()
-	anchor := messageAnchor(text, now) // якорь всего сообщения для наследования
+	anchor := MessageAnchor(text, now) // якорь всего сообщения для наследования
 	for _, b := range data.Blocks {
 		c := strings.TrimSpace(b.Content)
 		if c == "" {
@@ -269,18 +284,8 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 			t = strings.TrimSpace(*b.TargetDate)
 		}
 		t = ResolveTargetDate(t, now)
-		if a == "plan" || a == "task" || a == "fact" {
-			if ov := targetOverride(c, now); ov != "" {
-				t = ov // явный маркер в блоке — детерминированно поверх LLM
-			} else if anchor != "" && !hasDateAnchor(c) && reDaypartW.MatchString(text) {
-				// В блоке якоря нет (LLM мог перефразировать «вечером» прочь
-				// и выдумать дату — ловили 10-03 вместо 10-05), но сообщение
-				// говорит о части якорного дня — берём якорь всегда.
-				// Только plan/task: факты прошлого так не притягиваем.
-				if a == "plan" || a == "task" {
-					t = anchor
-				}
-			}
+		if et := EffectiveTarget(a, c, text, anchor, now); et != "" {
+			t = et
 		}
 		out.Targets = append(out.Targets, t)
 	}
