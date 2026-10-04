@@ -38,8 +38,10 @@ func New(store, sess *db.Store, cfg config.Config) *Server {
 			}
 			return s
 		},
-		// local переводит время в зону пользователя: {{.FireAt | local $.TZ}}
-		"local": func(t time.Time, tz string) string {
+		// local переводит время в зону пользователя: {{local $.TZ .FireAt}}
+		// (прямой вызов, не pipeline: в pipeline piped-значение идёт ПОСЛЕДНИМ
+		// аргументом и ломает порядок — ловили 500 на /reminders).
+		"local": func(tz string, t time.Time) string {
 			if loc, err := time.LoadLocation(tz); err == nil {
 				t = t.In(loc)
 			}
@@ -89,6 +91,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
+		log.Printf("render %s: %v", name, err)
 		http.Error(w, "render error", http.StatusInternalServerError)
 	}
 }
