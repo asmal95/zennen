@@ -625,7 +625,16 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 			a.send(ctx, chatID, "❌ Не получилось выпустить ссылку: "+err.Error())
 			return
 		}
-		a.send(ctx, chatID, "🔗 Твоя ссылка на веб-дневник (одноразовая, 15 минут):\n"+a.Cfg.WebBaseURL+"/r/"+token)
+		// Превью ссылки ВЫКЛЮЧЕНО: клиент для превью ходит по URL и тем
+		// самым палит одноразовость (ловили 401 сразу после выдачи).
+		noPreview := true
+		_, _ = a.Bot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "🔗 Твоя ссылка на веб-дневник (одноразовая, 15 минут):\n" + a.Cfg.WebBaseURL + "/r/" + token,
+			LinkPreviewOptions: &models.LinkPreviewOptions{
+				IsDisabled: &noPreview,
+			},
+		})
 	case "/revoke":
 		if err := a.Sess.RevokeWebSessions(userID); err != nil {
 			a.send(ctx, chatID, "❌ Не получилось отозвать: "+err.Error())

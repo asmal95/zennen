@@ -741,26 +741,35 @@ func (s *Store) CreateWebToken(userID int64, ttl time.Duration) (string, error) 
 	return token, nil
 }
 
-// ConsumeWebToken проверяет токен, удаляет его (одноразовый) и отдаёт user_id.
-// Просроченные заодно подчищает. ok=false — токена нет или истёк.
-func (s *Store) ConsumeWebToken(raw string) (int64, bool, error) {
-	h := webTokenHash(raw)
+// CheckWebToken проверяет токен БЕЗ удаления (для страницы подтверждения:
+// GET-запросы ходят и краулеры превью — гасить токен по ним нельзя).
+// ok=false — токена нет или истёк.
+func (s *Store) CheckWebToken(raw string) (int64, bool, error) {
 	var userID int64
 	var expires string
-	err := s.db.QueryRow(`SELECT user_id, expires_at FROM web_sessions WHERE token_hash=?`, h).Scan(&userID, &expires)
+	err := s.db.QueryRow(`SELECT user_id, expires_at FROM web_sessions WHERE token_hash=?`,
+		webTokenHash(raw)).Scan(&userID, &expires)
 	if err == sql.ErrNoRows {
 		return 0, false, nil
 	}
 	if err != nil {
 		return 0, false, err
 	}
-	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE token_hash=?`, h)
-	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE expires_at < ?`, time.Now().Format(time.RFC3339))
 	t, err := time.Parse(time.RFC3339, expires)
 	if err != nil || !t.After(time.Now()) {
 		return 0, false, nil
 	}
 	return userID, true, nil
+}
+
+// DropWebToken удаляет токен (плюс заодно подчищает просроченные).
+func (s *Store) DropWebToken(raw string) error {
+	h := webTokenHash(raw)
+	if _, err := s.db.Exec(`DELETE FROM web_sessions WHERE token_hash=?`, h); err != nil {
+		return err
+	}
+	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE expires_at < ?`, time.Now().Format(time.RFC3339))
+	return nil
 }
 
 // LookupWebSession проверяет сессионный cookie-токен (без удаления).

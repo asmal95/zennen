@@ -175,17 +175,40 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "login", nil)
 }
 
-// handleRedeem гасит одноразовый magic link и ставит сессионный cookie.
+// handleRedeem GET: проверяет magic link БЕЗ гашения и показывает кнопку входа.
+// Гашение только по POST: GET-запросы шлют и краулеры превью (Telegram),
+// а они за POST не ходят — иначе ссылку съедает превью до пользователя.
 func (s *Server) handleRedeem(w http.ResponseWriter, r *http.Request) {
-	raw := strings.TrimPrefix(r.URL.Path, "/r/")
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	raw := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/r/"))
+	if raw == "" || strings.Contains(raw, "/") {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	userID, ok, err := s.sess.ConsumeWebToken(raw)
+	if _, ok, _ := s.sess.CheckWebToken(raw); !ok {
+		http.Error(w, "ссылка недействительна или истекла — попроси новую в боте: /link", http.StatusUnauthorized)
+		return
+	}
+	s.render(w, "confirm", map[string]any{"Token": raw})
+}
+
+// handleConsume POST: гасит magic link, ставит сессионный cookie.
+func (s *Server) handleConsume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	raw := strings.TrimSpace(r.FormValue("t"))
+	userID, ok, err := s.sess.CheckWebToken(raw)
 	if err != nil || !ok {
 		http.Error(w, "ссылка недействительна или истекла — попроси новую в боте: /link", http.StatusUnauthorized)
+		return
+	}
+	if err := s.sess.DropWebToken(raw); err != nil {
+		http.Error(w, "token error", http.StatusInternalServerError)
 		return
 	}
 	session, err := s.sess.CreateWebToken(userID, 30*24*time.Hour)

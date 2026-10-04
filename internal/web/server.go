@@ -72,6 +72,7 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/r/", s.handleRedeem)
+	mux.HandleFunc("/r/consume", s.handleConsume)
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/{$}", s.requireAuth(s.handleIndex))
 	mux.HandleFunc("/day", s.requireAuth(s.handleDay))

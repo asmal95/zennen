@@ -1,0 +1,6 @@
+{{define "confirm"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Вход</title>{{template "css"}}</head><body><div class="wrap">
+<h1>🎙 Дневник</h1>
+<p>Войти в свой дневник в этом браузере?</p>
+<form method="post" action="/r/consume"><input type="hidden" name="t" value="{{.Token}}"><button>Войти</button></form>
+<p class="muted">Ссылка одноразовая: после входа она сгорит.</p>
+</div></body></html>{{end}}
