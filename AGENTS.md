@@ -59,7 +59,8 @@ systemctl is-active diarybot && journalctl -u diarybot -n 5
 
 ## 3. Git
 
-- Ветки/пуш — по указанию пользователя (remote он даст отдельно). Коммиты: короткие, по-русски или по-английски, в стиле репо.
+- Remote: `origin = git@github.com:asmal95/zennen.git` (SSH-ключ `~/.ssh/github_manul`, `GIT_SSH_COMMAND="ssh -i ~/.ssh/github_manul -o BatchMode=yes"`). Ветка `main`, push — только по явной просьбе пользователя.
+- Коммиты: короткие, в стиле репо (см. initial commit).
 - Перед коммитом: `gofmt -l` чисто, `go vet` чисто, сборка ок, `git status` — убедиться, что нет `.env`, `data/`, бинаря, `tmpcheck/`.
 - Секреты в истории искать так: `grep -rni "sk-or-\|AAGT" --include="*.go" --include="*.md" .` (исключая `.env`, которого в репо нет).
 
