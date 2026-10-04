@@ -1,6 +1,7 @@
-// Веб-вьювер дневника: только чтение.
-// diary.db открывается read-only; записи (сессии, кэш ревью) идут
-// в отдельный sessions.db, который бэкапить не нужно.
+// Веб-вьювер дневника: чтение + действия (задачи, напоминания, энергия).
+// Пишет в те же таблицы diary.db, что и бот (иначе планировщик и бот
+// не увидят созданного в вебе). Конкуренция записей ничтожна
+// (клики пользователя против минутного тикера), SQLite-локов хватает.
 // Наружу — только через reverse proxy с TLS, слушает localhost.
 package main
 
@@ -17,7 +18,7 @@ import (
 
 func main() {
 	cfg := config.Load()
-	store, err := db.OpenReadOnly(cfg.DBPath)
+	store, err := db.Open(cfg.DBPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "db open:", err)
 		os.Exit(1)
@@ -30,6 +31,6 @@ func main() {
 	}
 	defer sess.Close()
 	srv := web.New(store, sess, cfg)
-	fmt.Printf("web listening on %s (read-only db=%s)\n", cfg.WebListen, cfg.DBPath)
+	fmt.Printf("web listening on %s (db=%s)\n", cfg.WebListen, cfg.DBPath)
 	log.Fatal(http.ListenAndServe(cfg.WebListen, srv.Routes()))
 }

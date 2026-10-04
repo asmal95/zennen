@@ -1,6 +1,8 @@
 {{define "day"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.View.Day}}</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
 <h1>📅 {{.View.Day}}{{if .View.HasEnergy}} <span class="energy">· {{.View.Energy}}/10</span>{{end}}</h1>
 <p><a href="/day?d={{.Prev}}">← {{.Prev}}</a> · <a href="/day?d={{.Next}}">{{.Next}} →</a></p>
+<form method="post" action="/energy"><input type="hidden" name="day" value="{{.View.Day}}"><span class="muted">Энергия:</span>
+{{range .Nums}}<button name="v" value="{{.}}" {{if and $.View.HasEnergy (eq $.View.Energy .)}}style="outline:2px solid #6ab2ff"{{end}}>{{.}}</button>{{end}}</form>
 {{range .View.Notes}}<div class="note"><div class="t">{{if eq .Kind "voice"}}🎧{{else}}📝{{end}} {{hm .CreatedAt}}</div>
 {{if .Transcript}}<blockquote>{{.Transcript}}</blockquote>{{end}}
 {{range .Blocks}}<div class="blk">{{emoji .Aspect}} <span class="asp">{{aspect .Aspect}}</span>: {{.Content}}</div>{{end}}</div>{{end}}

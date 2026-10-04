@@ -127,24 +127,6 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// OpenReadOnly открывает БД только для чтения (для веб-вьювера):
-// ни схема, ни миграции не применяются — файл физически не меняется.
-func OpenReadOnly(path string) (*Store, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
-	}
-	database, err := sql.Open("sqlite", "file:"+abs+"?mode=ro")
-	if err != nil {
-		return nil, err
-	}
-	if err := database.Ping(); err != nil {
-		database.Close()
-		return nil, err
-	}
-	return &Store{Path: path, db: database}, nil
-}
-
 type Block struct {
 	Aspect  string
 	Content string
@@ -505,6 +487,39 @@ func (s *Store) DueReminders(now time.Time) ([]Reminder, error) {
 
 func (s *Store) MarkReminderSent(id int64) error {
 	_, err := s.db.Exec(`UPDATE reminders SET sent=1 WHERE id=?`, id)
+	return err
+}
+
+// UpcomingReminders — все несработавшие напоминания пользователя по времени.
+func (s *Store) UpcomingReminders(userID int64) ([]Reminder, error) {
+	rows, err := s.db.Query(
+		`SELECT r.id, r.task_id, r.user_id, t.text, r.fire_at, r.kind
+		 FROM reminders r JOIN tasks t ON t.id = r.task_id
+		 WHERE r.sent = 0 AND r.user_id = ? ORDER BY r.fire_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Reminder
+	for rows.Next() {
+		var r Reminder
+		var fireAt string
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.UserID, &r.Text, &fireAt, &r.Kind); err != nil {
+			return nil, err
+		}
+		t, err := time.Parse(time.RFC3339, fireAt)
+		if err != nil {
+			continue
+		}
+		r.FireAt = t
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteReminder отменяет напоминание (только своё).
+func (s *Store) DeleteReminder(userID, id int64) error {
+	_, err := s.db.Exec(`DELETE FROM reminders WHERE id=? AND user_id=?`, id, userID)
 	return err
 }
 

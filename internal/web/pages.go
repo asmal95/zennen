@@ -59,6 +59,7 @@ func (s *Server) handleDay(w http.ResponseWriter, r *http.Request) {
 		"View": s.dayView(id, day),
 		"Prev": t.AddDate(0, 0, -1).Format("2006-01-02"),
 		"Next": t.AddDate(0, 0, 1).Format("2006-01-02"),
+		"Nums": nums10,
 	})
 }
 

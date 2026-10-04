@@ -1,0 +1,11 @@
+{{define "reminders"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Напоминания</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>⏰ Напоминания ({{len .Items}})</h1>
+{{if .Err}}<p style="color:#ff8a80">{{.Err}}</p>{{end}}
+<form method="post" action="/reminders/new">
+<div class="s"><input type="text" name="what" placeholder="О чём напомнить…" maxlength="200"></div>
+<div class="s"><input type="text" name="when" placeholder="Когда: через 2 часа, в 15:30, завтра в 9…" maxlength="100"><button>⏰ Напомнить</button></div>
+</form>
+{{range .Items}}<div class="task"><b>{{.FireAt.Format "02.01 15:04"}}</b> — {{.Text}}
+<form method="post" action="/reminders/cancel" style="display:inline"><input type="hidden" name="id" value="{{.ID}}"><button>✕</button></form></div>
+{{else}}<p class="muted">Нет запланированных. Создай первое выше 👆</p>{{end}}
+</div></body></html>{{end}}

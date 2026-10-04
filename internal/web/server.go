@@ -14,6 +14,8 @@ import (
 	"diarybot/internal/services"
 )
 
+var nums10 = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+
 //go:embed templates/*.html
 var tmplFS embed.FS
 
@@ -85,6 +87,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/project", s.requireAuth(s.handleProject))
 	mux.HandleFunc("/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/export", s.requireAuth(s.handleExport))
+	mux.HandleFunc("/reminders", s.requireAuth(s.handleReminders))
+	mux.HandleFunc("POST /reminders/new", s.requireAuth(s.checkOrigin(s.handleReminderNew)))
+	mux.HandleFunc("POST /reminders/cancel", s.requireAuth(s.checkOrigin(s.handleReminderCancel)))
+	mux.HandleFunc("POST /tasks/close", s.requireAuth(s.checkOrigin(s.handleTaskClose)))
+	mux.HandleFunc("POST /tasks/new", s.requireAuth(s.checkOrigin(s.handleTaskNew)))
+	mux.HandleFunc("POST /energy", s.requireAuth(s.checkOrigin(s.handleEnergyVote)))
 	return logRequests(mux)
 }
 
