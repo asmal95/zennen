@@ -16,6 +16,14 @@ import (
 
 var nums10 = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 
+// aspectColors — цвета аспектов для таймлайна и дерева (тёмная тема).
+var aspectColors = map[string]string{
+	"fact": "6ab2ff", "thought": "c792ea", "plan": "ffd54f", "task": "69f0ae",
+	"idea": "ffab40", "emotion": "ff8a80", "health": "80cbc4", "work": "90a4ae",
+	"people": "f48fb1", "money": "aed581", "gratitude": "fff59d",
+	"decision": "bcaaa4", "other": "78909c",
+}
+
 //go:embed templates/*.html
 var tmplFS embed.FS
 
@@ -39,8 +47,14 @@ func New(store, sess *db.Store, cfg config.Config) *Server {
 			return s
 		},
 		// local переводит время в зону пользователя: {{local $.TZ .FireAt}}
-		// (прямой вызов, не pipeline: в pipeline piped-значение идёт ПОСЛЕДНИМ
+		// (прямой вызов, не pipeline: в pipeline piped-значение идёт последним
 		// аргументом и ломает порядок — ловили 500 на /reminders).
+		"acolor": func(aspect string) string {
+			if c, ok := aspectColors[aspect]; ok {
+				return c
+			}
+			return "#78909c"
+		},
 		"local": func(tz string, t time.Time) string {
 			if loc, err := time.LoadLocation(tz); err == nil {
 				t = t.In(loc)
@@ -110,6 +124,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/project", s.requireAuth(s.handleProject))
 	mux.HandleFunc("/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/export", s.requireAuth(s.handleExport))
+	mux.HandleFunc("/timeline", s.requireAuth(s.handleTimeline))
+	mux.HandleFunc("/tree", s.requireAuth(s.handleTree))
 	mux.HandleFunc("/reminders", s.requireAuth(s.handleReminders))
 	mux.HandleFunc("POST /reminders/new", s.requireAuth(s.checkOrigin(s.handleReminderNew)))
 	mux.HandleFunc("POST /reminders/cancel", s.requireAuth(s.checkOrigin(s.handleReminderCancel)))

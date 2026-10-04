@@ -145,6 +145,7 @@ type Task struct {
 	ID   int64
 	Text string
 	Due  string
+	Done bool
 }
 
 type Delegation struct {
@@ -302,7 +303,7 @@ func (s *Store) WeekBlocks(userID int64, days []string) ([]Block, error) {
 }
 
 func (s *Store) OpenTasks(userID int64) ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, text, due FROM tasks WHERE user_id=? AND done=0 ORDER BY id`, userID)
+	rows, err := s.db.Query(`SELECT id, text, due, done FROM tasks WHERE user_id=? AND done=0 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +311,7 @@ func (s *Store) OpenTasks(userID int64) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -320,7 +321,7 @@ func (s *Store) OpenTasks(userID int64) ([]Task, error) {
 
 func (s *Store) DoneTasksSince(userID int64, since time.Time) ([]Task, error) {
 	rows, err := s.db.Query(
-		`SELECT id, text, due FROM tasks WHERE user_id=? AND done=1 AND completed_at >= ? ORDER BY id`,
+		`SELECT id, text, due, done FROM tasks WHERE user_id=? AND done=1 AND completed_at >= ? ORDER BY id`,
 		userID, since.Format(time.RFC3339))
 	if err != nil {
 		return nil, err
@@ -329,7 +330,7 @@ func (s *Store) DoneTasksSince(userID int64, since time.Time) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -562,9 +563,9 @@ func (s *Store) EntryText(userID, entryID int64) (string, bool, error) {
 	return transcript, true, nil
 }
 
-// OpenTasksByEntry — открытые задачи одной записи (для кнопки «В задачу»: дубли не плодим).
-func (s *Store) OpenTasksByEntry(entryID int64) ([]Task, error) {
-	rows, err := s.db.Query(`SELECT id, text, due FROM tasks WHERE entry_id=? AND done=0 ORDER BY id`, entryID)
+// TasksByEntry — все задачи одной записи со статусами (для таймлайна).
+func (s *Store) TasksByEntry(entryID int64) ([]Task, error) {
+	rows, err := s.db.Query(`SELECT id, text, due, done FROM tasks WHERE entry_id=? ORDER BY id`, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -572,7 +573,44 @@ func (s *Store) OpenTasksByEntry(entryID int64) ([]Task, error) {
 	var out []Task
 	for rows.Next() {
 		var t Task
-		if err := rows.Scan(&t.ID, &t.Text, &t.Due); err != nil {
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// EntityValues — distinct-значения сущностей типа (корни дерева связей).
+func (s *Store) EntityValues(userID int64, etype string, limit int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT value FROM entities WHERE user_id=? AND type=? ORDER BY value LIMIT ?`,
+		userID, etype, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// OpenTasksByEntry — открытые задачи одной записи (для кнопки «В задачу»: дубли не плодим).
+func (s *Store) OpenTasksByEntry(entryID int64) ([]Task, error) {
+	rows, err := s.db.Query(`SELECT id, text, due, done FROM tasks WHERE entry_id=? AND done=0 ORDER BY id`, entryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(&t.ID, &t.Text, &t.Due, &t.Done); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -657,6 +695,7 @@ func (s *Store) UpdateTranscript(userID, entryID int64, text string) (bool, erro
 }
 
 type ExportNote struct {
+	ID         int64
 	Day        string
 	Kind       string
 	Transcript string
@@ -686,7 +725,7 @@ func (s *Store) ExportMonth(userID int64, month string) ([]ExportNote, error) {
 			return nil, err
 		}
 		if id != lastID {
-			out = append(out, ExportNote{Day: day, Kind: kind, Transcript: transcript, CreatedAt: createdAt})
+			out = append(out, ExportNote{ID: id, Day: day, Kind: kind, Transcript: transcript, CreatedAt: createdAt})
 			lastID = id
 		}
 		if aspect.Valid {
@@ -881,7 +920,7 @@ func (s *Store) DayEntries(userID int64, day string) ([]ExportNote, error) {
 			return nil, err
 		}
 		if id != lastID {
-			out = append(out, ExportNote{Day: d, Kind: kind, Transcript: transcript, CreatedAt: createdAt})
+			out = append(out, ExportNote{ID: id, Day: d, Kind: kind, Transcript: transcript, CreatedAt: createdAt})
 			lastID = id
 		}
 		if aspect.Valid {

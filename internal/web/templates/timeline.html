@@ -1,0 +1,13 @@
+{{define "timeline"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Таймлайн</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>🕰 Таймлайн</h1>
+{{range .Months}}<h2 class="tl-month">{{.Month}}</h2><div class="tl">
+{{range .Days}}<div class="tl-day"><div class="tl-dot"></div>
+<div class="tl-head">📅 {{.Day}}{{if .HasEnergy}} <span class="energy">· {{.Energy}}/10</span>{{end}}</div>
+{{range .Notes}}<div class="tl-item" style="border-color:#{{.Color}}">
+<div class="t">{{if eq .Kind "voice"}}🎧{{else}}📝{{end}} {{hm .CreatedAt}}</div>
+{{if .Transcript}}<blockquote>{{.Transcript}}</blockquote>{{end}}
+{{range .Blocks}}<div class="blk"><span style="color:#{{acolor .Aspect}}">●</span> <span class="asp">{{aspect .Aspect}}</span>: {{.Content}}</div>{{end}}
+{{range .Tasks}}<div class="blk">{{if .Done}}<span style="color:#69f0ae">✓</span> <s class="muted">{{.Text}}</s>{{else}}<span style="color:#ffd54f">○</span> {{.Text}}{{end}}</div>{{end}}
+</div>{{end}}</div>{{end}}</div>
+{{else}}<p class="muted">Пока пусто.</p>{{end}}
+</div></body></html>{{end}}

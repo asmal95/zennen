@@ -31,7 +31,7 @@ ai-dictaphone-diary/
     handlers/handlers.go     # приём voice/audio/кружков/text + команды + колбэки (task:/edit:/del:/del_yes/del_no/energy:, pendingEdit в памяти со сбросом на команду/голос) + /link + /revoke (сессии в Sess store)
     scheduler/scheduler.go   # ежеминутный dispatchDigests (локальный час юзера + DigestDue + MarkDigest) + ежеминутно due-reminders + ежедневно 3:00 DailyBackup (VACUUM INTO, ротация 14)
   cmd/web/main.go              # веб-вьювер: diary.db read-only + sessions.db RW (см. WEB.md)
-  internal/web/                # server.go (auth, сессии), pages.go (GET), actions.go (POST: reminders/tasks/energy + checkOrigin), templates/*.html (embed)
+  internal/web/                # server.go (auth, сессии, acolor), pages.go (GET incl. timeline/tree), actions.go (POST + checkOrigin), templates/*.html (embed)
   archive/python-bot/        # первый прототип. НЕ править, только смотреть как референс.
   data/                      # diary.db + backups/ — рантайм, НЕ коммитить, не читать без нужды
   .env                       # секреты — НЕ коммитить (в .gitignore)

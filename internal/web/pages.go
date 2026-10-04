@@ -109,6 +109,98 @@ func (s *Server) cachedReview(r *http.Request, userID int64, day string) (string
 	}
 }
 
+// TLNote — запись таймлайна: разбор + задачи со статусами + доминантный аспект.
+type TLNote struct {
+	db.ExportNote
+	Tasks []db.Task
+	Color string
+}
+
+// TLDay — день таймлайна.
+type TLDay struct {
+	Day       string
+	Energy    int
+	HasEnergy bool
+	Notes     []TLNote
+}
+
+// TLMonth — группа дней одного месяца.
+type TLMonth struct {
+	Month string
+	Days  []TLDay
+}
+
+func (s *Server) tlDay(userID int64, day string) TLDay {
+	d := TLDay{Day: day}
+	notes, _ := s.store.DayEntries(userID, day)
+	if m, _ := s.store.WeekEnergy(userID, []string{day}); m != nil {
+		if e, ok := m[day]; ok {
+			d.Energy, d.HasEnergy = e, true
+		}
+	}
+	for _, n := range notes {
+		tn := TLNote{ExportNote: n}
+		if len(n.Blocks) > 0 {
+			if c, ok := aspectColors[n.Blocks[0].Aspect]; ok {
+				tn.Color = c
+			} else {
+				tn.Color = "78909c"
+			}
+		} else {
+			tn.Color = "78909c"
+		}
+		tn.Tasks, _ = s.store.TasksByEntry(n.ID)
+		d.Notes = append(d.Notes, tn)
+	}
+	return d
+}
+
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	id, _ := s.userID(r)
+	days, _ := s.store.DayList(id, 30)
+	var months []TLMonth
+	for _, d := range days {
+		m := d[:7]
+		if len(months) == 0 || months[len(months)-1].Month != m {
+			months = append(months, TLMonth{Month: m})
+		}
+		last := &months[len(months)-1]
+		last.Days = append(last.Days, s.tlDay(id, d))
+	}
+	s.render(w, "timeline", map[string]any{"Months": months})
+}
+
+// TreeItem — ветка дерева: значение сущности + записи с ней.
+type TreeItem struct {
+	Value string
+	Hits  []services.HistoryHit
+}
+
+// TreeGroup — корень дерева: люди или проекты.
+type TreeGroup struct {
+	Icon  string
+	Label string
+	Items []TreeItem
+}
+
+func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
+	id, _ := s.userID(r)
+	var groups []TreeGroup
+	for _, g := range [][3]string{{"person", "👥", "Люди"}, {"project", "#️⃣", "Проекты"}} {
+		tg := TreeGroup{Icon: g[1], Label: g[2]}
+		values, _ := s.store.EntityValues(id, g[0], 30)
+		for _, v := range values {
+			hits, _, _ := services.EntityHistory(s.store, id, g[0], v, 10)
+			if len(hits) == 0 {
+				continue
+			}
+			tg.Items = append(tg.Items, TreeItem{Value: v, Hits: hits})
+		}
+		groups = append(groups, tg)
+	}
+	s.render(w, "tree", map[string]any{"Groups": groups})
+}
+
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	id, _ := s.userID(r)
 	open, _ := s.store.OpenTasks(id)

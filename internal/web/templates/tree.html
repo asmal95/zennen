@@ -1,0 +1,10 @@
+{{define "tree"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Связи</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
+<h1>🌳 Дерево связей</h1>
+<p class="muted">Люди и проекты → записи с ними → что там было.</p>
+{{range .Groups}}<h2>{{.Icon}} {{.Label}} ({{len .Items}})</h2>
+{{range .Items}}<div class="tr-root">{{.Value}}</div><ul class="tr">
+{{range .Hits}}<li><span class="muted">{{.Day}}</span>
+{{range .Blocks}}<div class="blk"><span style="color:#{{acolor .Aspect}}">●</span> <span class="asp">{{aspect .Aspect}}</span>: {{.Content}}</div>{{end}}</li>
+{{end}}</ul>{{else}}<p class="muted">Пока пусто.</p>{{end}}
+{{end}}
+</div></body></html>{{end}}
