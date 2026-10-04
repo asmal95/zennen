@@ -185,7 +185,8 @@ func (s *Server) handleRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, ok, _ := s.sess.CheckWebToken(raw); !ok {
-		http.Error(w, "ссылка недействительна или истекла — попроси новую в боте: /link", http.StatusUnauthorized)
+		w.WriteHeader(http.StatusUnauthorized)
+		s.render(w, "expired", nil)
 		return
 	}
 	s.render(w, "confirm", map[string]any{"Token": raw})
@@ -204,7 +205,8 @@ func (s *Server) handleConsume(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.FormValue("t"))
 	userID, ok, err := s.sess.CheckWebToken(raw)
 	if err != nil || !ok {
-		http.Error(w, "ссылка недействительна или истекла — попроси новую в боте: /link", http.StatusUnauthorized)
+		w.WriteHeader(http.StatusUnauthorized)
+		s.render(w, "expired", nil)
 		return
 	}
 	if err := s.sess.DropWebToken(raw); err != nil {

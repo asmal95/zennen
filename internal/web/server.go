@@ -4,7 +4,9 @@ import (
 	"context"
 	"embed"
 	"html/template"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"diarybot/internal/config"
@@ -83,7 +85,37 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/project", s.requireAuth(s.handleProject))
 	mux.HandleFunc("/search", s.requireAuth(s.handleSearch))
 	mux.HandleFunc("/export", s.requireAuth(s.handleExport))
-	return mux
+	return logRequests(mux)
+}
+
+// statusWriter перехватывает код ответа для логов.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// logRequests пишет method/path/status без секретов: токен в /r/<hex>
+// и значения query (там может быть текст поиска) в лог не попадают.
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(sw, r)
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/r/") {
+			path = "/r/…"
+		}
+		q := ""
+		if r.URL.RawQuery != "" {
+			q = "?…"
+		}
+		log.Printf("%s %s%s %d %s", r.Method, path, q, sw.status, time.Since(start).Round(time.Millisecond))
+	})
 }
 
 func today() string { return time.Now().Format("2006-01-02") }
