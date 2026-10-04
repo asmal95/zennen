@@ -24,31 +24,42 @@ func Start(ctx context.Context, b *bot.Bot, cfg config.Config, store *db.Store) 
 	}
 	c := cron.New(cron.WithLocation(loc))
 
-	morning := func() {
+	// Диспетчер дайджестов: каждую минуту сверяем ЛОКАЛЬНЫЙ час каждого
+	// пользователя с его настройками. Флаг last_*_day в users защищает от
+	// повторов и заодно чинит пропуск при рестарте после часа X.
+	dispatchDigests := func() {
 		users, _ := store.DistinctUsers()
-		day := time.Now().In(loc).Format("2006-01-02")
 		for _, u := range users {
-			blocks, _ := store.DayBlocks(u, day)
-			tasks, _ := store.OpenTasks(u)
-			text := fmt.Sprintf("☀️ Доброе утро! Сегодня уже %d записей.\n\n%s\n\nНаговори или напиши планы на день 🎙",
-				len(blocks), services.RenderTasks(tasks))
-			_, _ = b.SendMessage(context.Background(), &bot.SendMessageParams{
-				ChatID: u, Text: text, ParseMode: "HTML",
-			})
-		}
-	}
-	evening := func() {
-		users, _ := store.DistinctUsers()
-		day := time.Now().In(loc).Format("2006-01-02")
-		for _, u := range users {
-			blocks, _ := store.DayBlocks(u, day)
-			tasks, _ := store.OpenTasks(u)
-			text := fmt.Sprintf("🌙 Вечер. Сегодня %d записей, открытых задач: %d.\nЧто было главным? Наговори или напиши 1–2 минуты — я сохраню как рефлексию дня.\n\nКакая энергия сегодня? Жми кнопку 👇",
-				len(blocks), len(tasks))
-			_, _ = b.SendMessage(context.Background(), &bot.SendMessageParams{
-				ChatID: u, Text: text, ParseMode: "HTML",
-				ReplyMarkup: services.EnergyKeyboard(day),
-			})
+			ulo := services.UserLoc(store, u, cfg.TZ)
+			now := time.Now().In(ulo)
+			usr, err := store.GetUser(u, cfg.TZ)
+			if err != nil {
+				continue
+			}
+			day := now.Format("2006-01-02")
+			if due, _ := services.DigestDue(now, cfg.MorningHour, usr.LastMorningDay); due {
+				blocks, _ := store.DayBlocks(u, day)
+				tasks, _ := store.OpenTasks(u)
+				text := fmt.Sprintf("☀️ Доброе утро! Сегодня уже %d записей.\n\n%s\n\nНаговори или напиши планы на день 🎙",
+					len(blocks), services.RenderTasks(tasks))
+				if _, err := b.SendMessage(context.Background(), &bot.SendMessageParams{
+					ChatID: u, Text: text, ParseMode: "HTML",
+				}); err == nil {
+					_ = store.MarkDigest(u, "morning", day)
+				}
+			}
+			if due, _ := services.DigestDue(now, cfg.EveningHour, usr.LastEveningDay); due {
+				blocks, _ := store.DayBlocks(u, day)
+				tasks, _ := store.OpenTasks(u)
+				text := fmt.Sprintf("🌙 Вечер. Сегодня %d записей, открытых задач: %d.\nЧто было главным? Наговори или напиши 1–2 минуты — я сохраню как рефлексию дня.\n\nКакая энергия сегодня? Жми кнопку 👇",
+					len(blocks), len(tasks))
+				if _, err := b.SendMessage(context.Background(), &bot.SendMessageParams{
+					ChatID: u, Text: text, ParseMode: "HTML",
+					ReplyMarkup: services.EnergyKeyboard(day),
+				}); err == nil {
+					_ = store.MarkDigest(u, "evening", day)
+				}
+			}
 		}
 	}
 
@@ -61,10 +72,7 @@ func Start(ctx context.Context, b *bot.Bot, cfg config.Config, store *db.Store) 
 		}
 	}
 
-	if _, err := c.AddFunc(fmt.Sprintf("0 %d * * *", cfg.MorningHour), morning); err != nil {
-		return nil, err
-	}
-	if _, err := c.AddFunc(fmt.Sprintf("0 %d * * *", cfg.EveningHour), evening); err != nil {
+	if _, err := c.AddFunc("* * * * *", dispatchDigests); err != nil {
 		return nil, err
 	}
 	if _, err := c.AddFunc("* * * * *", checkReminders); err != nil {

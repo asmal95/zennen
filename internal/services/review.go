@@ -31,7 +31,7 @@ const reviewSystem = `Ты — внимательный редактор лич�
 
 // BuildWeeklyReview собирает данные 7 дней и строит нарративный дайджест одним LLM-вызовом.
 func BuildWeeklyReview(ctx context.Context, cfg config.Config, store *db.Store, userID int64) (string, error) {
-	now := time.Now()
+	now := time.Now().In(UserLoc(store, userID, cfg.TZ))
 	var days []string
 	for i := 6; i >= 0; i-- {
 		days = append(days, now.AddDate(0, 0, -i).Format("2006-01-02"))

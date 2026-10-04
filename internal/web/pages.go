@@ -44,7 +44,7 @@ func (s *Server) handleDay(w http.ResponseWriter, r *http.Request) {
 	id, _ := s.userID(r)
 	day := r.URL.Query().Get("d")
 	if day == "" {
-		day = today()
+		day = s.userNow(id).Format("2006-01-02")
 	}
 	if len(day) != 10 {
 		http.Error(w, "bad day, want YYYY-MM-DD", http.StatusBadRequest)
@@ -65,7 +65,7 @@ func (s *Server) handleDay(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWeek(w http.ResponseWriter, r *http.Request) {
 	id, _ := s.userID(r)
-	now := time.Now()
+	now := s.userNow(id)
 	var days []string
 	for i := 6; i >= 0; i-- {
 		days = append(days, now.AddDate(0, 0, -i).Format("2006-01-02"))
@@ -78,7 +78,7 @@ func (s *Server) handleWeek(w http.ResponseWriter, r *http.Request) {
 	energy, _ := s.store.WeekEnergy(id, days)
 	bars, nums := services.EnergySparkline(days, energy)
 
-	review, regenErr := s.cachedReview(r, id, today())
+	review, regenErr := s.cachedReview(r, id, now.Format("2006-01-02"))
 	s.render(w, "week", map[string]any{
 		"Blocks": len(rows), "Counts": counts,
 		"Bars": bars, "Nums": nums, "HasEnergy": len(energy) > 0,
@@ -159,7 +159,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	id, _ := s.userID(r)
 	month := r.URL.Query().Get("month")
 	if month == "" {
-		month = today()[:7]
+		month = s.userNow(id).Format("2006-01")
 	}
 	notes, err := s.store.ExportMonth(id, month)
 	if err != nil || len(notes) == 0 {

@@ -5,7 +5,7 @@
 <div class="s"><input type="text" name="what" placeholder="О чём напомнить…" maxlength="200"></div>
 <div class="s"><input type="text" name="when" placeholder="Когда: через 2 часа, в 15:30, завтра в 9…" maxlength="100"><button>⏰ Напомнить</button></div>
 </form>
-{{range .Items}}<div class="task"><b>{{.FireAt.Format "02.01 15:04"}}</b> — {{.Text}}
+{{range .Items}}<div class="task"><b>{{.FireAt | local $.TZ}}</b> — {{.Text}}
 <form method="post" action="/reminders/cancel" style="display:inline"><input type="hidden" name="id" value="{{.ID}}"><button>✕</button></form></div>
 {{else}}<p class="muted">Нет запланированных. Создай первое выше 👆</p>{{end}}
 </div></body></html>{{end}}

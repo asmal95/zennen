@@ -12,8 +12,8 @@ Telegram-бот «дневник-диктофон» на **Go**: пользов�
 ai-dictaphone-diary/
   cmd/bot/main.go            # точка входа: polling + планировщик (требует BOT_TOKEN и OPENAI_API_KEY, иначе exit)
   internal/
-    config/config.go         # конфиг из .env (BOT_TOKEN, OPENAI_* incl. BASE_URL, TZ, DB_PATH, ...)
-    db/db.go                 # SQLite (modernc.org/sqlite, pure Go): entries/blocks/entities/tasks/reminders/delegations/energy + миграции ALTER TABLE в Open()
+    config/config.go         # конфиг из .env (BOT_TOKEN, OPENAI_* incl. BASE_URL, TZ-дефолт, DB_PATH, ...); TZ персональный — в таблице users, не в конфиге
+    db/db.go                 # SQLite (modernc.org/sqlite, pure Go): entries/blocks/entities/tasks/reminders/delegations/energy/users/web_sessions/week_cache + миграции ALTER TABLE в Open()
     services/
       llm.go                 # NewLLMClient: OpenAI-совместимый клиент на OPENAI_BASE_URL
       stt.go                 # Whisper API; "" при ошибке, хендлер просит текстом
@@ -23,12 +23,13 @@ ai-dictaphone-diary/
       pipeline.go            # IngestText (анализ → дата → AddEntry → analyzeAndStore), ReanalyzeEntry (день сохраняется), ResolveEntryDate (клямп: прошлое ≤ года, не будущее)
       review.go              # BuildWeeklyReview: данные 7 дней → 1 LLM-вызов, plain text, ErrNoData если пусто
       people.go              # MatchName (стемминг падежей, префикс-не-подстрока) + EntityHistory для /person /project
+      users.go               # UserLoc (зона юзера, фолбэки) + DigestDue (чистая функция диспетчера)
       energy.go              # EnergySparkline + EnergyKeyboard(день); колбэк "energy:ГГГГ-ММ-ДД:N" в handlers
       delegate.go            # DelegationCard + AgentPlugin (NoOp/Calendar-заглушки, без исполнения)
       render.go              # RenderBlocks/RenderDay/RenderTasks (HTML); EmojiFor живёт в export.go
       export.go              # EmojiFor + RenderExportMarkdown (Obsidian/Notion)
     handlers/handlers.go     # приём voice/audio/кружков/text + команды + колбэки (task:/edit:/del:/del_yes/del_no/energy:, pendingEdit в памяти со сбросом на команду/голос) + /link + /revoke (сессии в Sess store)
-    scheduler/scheduler.go   # cron: утро / вечер (с кнопками энергии) + ежеминутно due-reminders + ежедневно 3:00 DailyBackup (VACUUM INTO, ротация 14)
+    scheduler/scheduler.go   # ежеминутный dispatchDigests (локальный час юзера + DigestDue + MarkDigest) + ежеминутно due-reminders + ежедневно 3:00 DailyBackup (VACUUM INTO, ротация 14)
   cmd/web/main.go              # веб-вьювер: diary.db read-only + sessions.db RW (см. WEB.md)
   internal/web/                # server.go (auth, сессии), pages.go (GET), actions.go (POST: reminders/tasks/energy + checkOrigin), templates/*.html (embed)
   archive/python-bot/        # первый прототип. НЕ править, только смотреть как референс.
@@ -39,7 +40,7 @@ ai-dictaphone-diary/
   AGENTS.md                  # этот файл
 ```
 
-Команды бота: `/today /day /notes /week /tasks /done /ideas /energy /person /project /delegations /search /export /delete_day /link /revoke /help` + кнопки под разбором (✅/✏️/🗑) и шкала энергии 1–10. Прод: `diarybot` + `diaryweb` под systemd, nginx `nen.zenai.space` → 127.0.0.1:8070 (сертификат certbot).
+Команды бота: `/today /day /notes /week /tasks /done /ideas /energy /person /project /delegations /search /export /delete_day /link /revoke /tz /help` + кнопки под разбором (✅/✏️/🗑), шкала энергии 1–10, кнопки зоны (tz:). Прод: `diarybot` + `diaryweb` под systemd, nginx `nen.zenai.space` → 127.0.0.1:8070 (сертификат certbot).
 
 ## 2. Запуск и проверка (обязательно после правок)
 

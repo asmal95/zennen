@@ -38,6 +38,13 @@ func New(store, sess *db.Store, cfg config.Config) *Server {
 			}
 			return s
 		},
+		// local переводит время в зону пользователя: {{.FireAt | local $.TZ}}
+		"local": func(t time.Time, tz string) string {
+			if loc, err := time.LoadLocation(tz); err == nil {
+				t = t.In(loc)
+			}
+			return t.Format("02.01 15:04")
+		},
 	}).ParseFS(tmplFS, "templates/*.html"))
 	return &Server{store: store, sess: sess, cfg: cfg, tmpl: t}
 }
@@ -46,6 +53,19 @@ func (s *Server) userID(r *http.Request) (int64, bool) {
 	v := r.Context().Value(ctxKey{})
 	id, ok := v.(int64)
 	return id, ok
+}
+
+// userNow — «сейчас» по персональной зоне пользователя.
+func (s *Server) userNow(userID int64) time.Time {
+	return time.Now().In(services.UserLoc(s.store, userID, s.cfg.TZ))
+}
+
+// userTZName — имя зоны для шаблонов (форматирование времени).
+func (s *Server) userTZName(userID int64) string {
+	if u, err := s.store.GetUser(userID, s.cfg.TZ); err == nil && u.TZ != "" {
+		return u.TZ
+	}
+	return s.cfg.TZ
 }
 
 // requireAuth пускает только с валидным сессионным cookie.
@@ -125,5 +145,3 @@ func logRequests(next http.Handler) http.Handler {
 		log.Printf("%s %s%s %d %s", r.Method, path, q, sw.status, time.Since(start).Round(time.Millisecond))
 	})
 }
-
-func today() string { return time.Now().Format("2006-01-02") }

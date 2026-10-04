@@ -72,7 +72,8 @@ func IngestText(ctx context.Context, cfg config.Config, store *db.Store, userID 
 	}
 	// Сначала анализ: от него зависит дата записи (entry_date).
 	analysis, err := AnalyzeFull(ctx, text, cfg.OpenAIKey, cfg.OpenAIBaseURL, cfg.OpenAIModel)
-	day := TodayStr()
+	unow := time.Now().In(UserLoc(store, userID, cfg.TZ)) // «сегодня» — по зоне пользователя
+	day := unow.Format("2006-01-02")
 	if err != nil {
 		// Сырьё сохраняем сегодняшним числом — возвращаем ошибку с контекстом,
 		// хендлер скажет пользователю, что заметка сохранена.
@@ -85,7 +86,7 @@ func IngestText(ctx context.Context, cfg config.Config, store *db.Store, userID 
 		}
 		return nil, err
 	}
-	if d := ResolveEntryDate(analysis.EntryDate, time.Now()); d != "" {
+	if d := ResolveEntryDate(analysis.EntryDate, unow); d != "" {
 		day = d // события прошлого — запись задним числом
 	}
 	entryID, err := store.AddEntry(userID, day, kind, raw, transcript)
@@ -138,10 +139,7 @@ func analyzeAndStore(ctx context.Context, cfg config.Config, store *db.Store, us
 	// Просьба напомнить: парсим время и ставим триггер в reminders.
 	// Без времени («напомни потом») триггер не ставим — задача уже в /tasks.
 	if RemindIntentRe.MatchString(text) {
-		loc, _ := time.LoadLocation(cfg.TZ)
-		if loc == nil {
-			loc = time.Local
-		}
+		loc := UserLoc(store, userID, cfg.TZ)
 		if fireAt, ok := ParseRemindAt(text, time.Now(), loc); ok {
 			taskID := int64(0)
 			if len(res.TaskIDs) > 0 {

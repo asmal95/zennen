@@ -98,6 +98,14 @@ CREATE TABLE IF NOT EXISTS week_cache(
   created_at TEXT NOT NULL,
   PRIMARY KEY (user_id, day)
 );
+CREATE TABLE IF NOT EXISTS users(
+  user_id INTEGER PRIMARY KEY,
+  tz TEXT NOT NULL DEFAULT '',
+  tz_set INTEGER NOT NULL DEFAULT 0,
+  last_morning_day TEXT NOT NULL DEFAULT '',
+  last_evening_day TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 `
 
 type Store struct {
@@ -882,6 +890,58 @@ func (s *Store) DayEntries(userID int64, day string) ([]ExportNote, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+type User struct {
+	ID             int64
+	TZ             string
+	TZSet          bool
+	LastMorningDay string
+	LastEveningDay string
+}
+
+// GetUser возвращает пользователя, создавая строку с дефолтной зоной при первом обращении.
+func (s *Store) GetUser(userID int64, defaultTZ string) (User, error) {
+	var u User
+	err := s.db.QueryRow(`SELECT user_id, tz, tz_set, last_morning_day, last_evening_day FROM users WHERE user_id=?`,
+		userID).Scan(&u.ID, &u.TZ, &u.TZSet, &u.LastMorningDay, &u.LastEveningDay)
+	if err == sql.ErrNoRows {
+		tz := defaultTZ
+		if tz == "" {
+			tz = "Europe/Moscow"
+		}
+		if _, err := s.db.Exec(`INSERT INTO users(user_id, tz, created_at) VALUES(?,?,?)`,
+			userID, tz, time.Now().Format(time.RFC3339)); err != nil {
+			return User{}, err
+		}
+		return User{ID: userID, TZ: tz}, nil
+	}
+	if err != nil {
+		return User{}, err
+	}
+	if u.TZ == "" {
+		u.TZ = defaultTZ
+	}
+	return u, nil
+}
+
+// SetUserTZ ставит зону (проверка валидности — на вызывающем через time.LoadLocation).
+func (s *Store) SetUserTZ(userID int64, tz string) error {
+	if _, err := s.GetUser(userID, tz); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE users SET tz=?, tz_set=1 WHERE user_id=?`, tz, userID)
+	return err
+}
+
+// MarkDigest фиксирует отправку дайджеста за день (защита от повторов).
+func (s *Store) MarkDigest(userID int64, kind, day string) error {
+	col := "last_morning_day"
+	if kind == "evening" {
+		col = "last_evening_day"
+	}
+	_, err := s.db.Exec(fmt.Sprintf(`UPDATE users SET %s=? WHERE user_id=?`, col), day, userID)
+	return err
 }
 
 // VacuumInto делает консистентный снапшот живой БД (для бэкапов).

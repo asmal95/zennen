@@ -60,6 +60,11 @@ func (a *App) clearPendingEdit(userID int64) {
 	delete(a.pendingEdit, userID)
 }
 
+// userNow — «сейчас» по персональной зоне пользователя (дефолт из конфига).
+func (a *App) userNow(userID int64) time.Time {
+	return time.Now().In(services.UserLoc(a.Store, userID, a.Cfg.TZ))
+}
+
 const helpText = `🎙 <b>ИИ-Диктофон Дневника</b> (voice-first, текст тоже ок)
 
 Каждый день излагай мысли <b>голосом или текстом</b> — как удобно. Голос — основной способ, текст — равноправный. Я сам веду журнал: заметки, сущности, 📌 планы, ✅ задачи, ⏰ напоминания.
@@ -80,6 +85,7 @@ const helpText = `🎙 <b>ИИ-Диктофон Дневника</b> (voice-firs
 /delete_day [ГГГГ-ММ-ДД] — удалить день (по умолчанию сегодня)
 /link — ссылка на веб-версию дневника
 /revoke — отозвать все веб-сессии
+/tz [Зона] — часовой пояс (по умолчанию Europe/Moscow)
 /help — это сообщение
 
 Под каждым разбором кнопки: ✅ в задачу, ✏️ исправить текст, 🗑 удалить запись.
@@ -261,8 +267,61 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 // handleCallback — кнопки под разбором, энергия и подтверждения удаления.
 // Форматы: "действие:entryID" либо "energy:ГГГГ-ММ-ДД:1-10".
 // Спиннер гасим всегда; для энергии — тостом с результатом.
+// tzZones — популярные зоны для кнопок; любую IANA-зону можно вписать текстом: /tz Asia/Almaty.
+var tzZones = [][2]string{
+	{"Калининград", "Europe/Kaliningrad"}, {"Москва", "Europe/Moscow"},
+	{"Самара", "Europe/Samara"}, {"Екатеринбург", "Asia/Yekaterinburg"},
+	{"Омск", "Asia/Omsk"}, {"Новосибирск", "Asia/Novosibirsk"},
+	{"Владивосток", "Asia/Vladivostok"},
+}
+
+func (a *App) sendTZQuestion(ctx context.Context, chatID int64) {
+	var rows [][]models.InlineKeyboardButton
+	var row []models.InlineKeyboardButton
+	for i, z := range tzZones {
+		row = append(row, models.InlineKeyboardButton{Text: z[0], CallbackData: "tz:" + z[1]})
+		if i%3 == 2 {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	_, _ = a.Bot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        "🌍 Какой у тебя часовой пояс? От него зависят утро/вечер и время напоминаний.\nМожно и текстом: /tz Asia/Almaty",
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: rows},
+	})
+}
+
 func (a *App) handleCallback(ctx context.Context, cb *models.CallbackQuery) {
 	userID := cb.From.ID
+	if act, rest, _ := strings.Cut(cb.Data, ":"); act == "tz" {
+		zone := rest
+		if _, err := time.LoadLocation(zone); err != nil {
+			_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cb.ID, Text: "Не знаю такую зону",
+			})
+			return
+		}
+		if err := a.Store.SetUserTZ(userID, zone); err != nil {
+			_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cb.ID, Text: "Не сохранилось",
+			})
+			return
+		}
+		_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID, Text: "Зона: " + zone + " ✓",
+		})
+		if cb.Message.Message != nil {
+			_, _ = a.Bot.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: cb.Message.Message.Chat.ID,
+				Text:   "🌍 Часовой пояс: " + zone + ". Утро/вечер и напоминания теперь по нему.",
+			})
+		}
+		return
+	}
 	if act, rest, _ := strings.Cut(cb.Data, ":"); act == "energy" {
 		day, vstr, _ := strings.Cut(rest, ":")
 		v, err := strconv.Atoi(vstr)
@@ -401,14 +460,33 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 	switch cmd {
 	case "/start", "/help":
 		a.send(ctx, chatID, helpText)
+		if cmd == "/start" {
+			if u, err := a.Store.GetUser(userID, a.Cfg.TZ); err == nil && !u.TZSet {
+				a.sendTZQuestion(ctx, chatID)
+			}
+		}
+	case "/tz":
+		if arg == "" {
+			a.sendTZQuestion(ctx, chatID)
+			return
+		}
+		if _, err := time.LoadLocation(arg); err != nil {
+			a.send(ctx, chatID, "Не знаю такую зону. Пример: /tz Asia/Almaty (или выбери кнопкой: /tz)")
+			return
+		}
+		if err := a.Store.SetUserTZ(userID, arg); err != nil {
+			a.send(ctx, chatID, "❌ Не сохранилось: "+err.Error())
+			return
+		}
+		a.send(ctx, chatID, "🌍 Часовой пояс: "+arg+". Утро/вечер и напоминания теперь по нему.")
 	case "/today":
-		day := time.Now().Format("2006-01-02")
+		day := a.userNow(userID).Format("2006-01-02")
 		blocks, _ := a.Store.DayBlocks(userID, day)
 		a.send(ctx, chatID, services.RenderDay(day, blocks))
 	case "/day":
 		day := arg
 		if day == "" {
-			day = time.Now().Format("2006-01-02")
+			day = a.userNow(userID).Format("2006-01-02")
 		}
 		if !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(day) {
 			a.send(ctx, chatID, "Использование: /day [ГГГГ-ММ-ДД], например /day 2026-10-03")
@@ -437,8 +515,9 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 		a.send(ctx, chatID, b.String())
 	case "/week":
 		var days []string
+		unow := a.userNow(userID)
 		for i := 6; i >= 0; i-- {
-			days = append(days, time.Now().AddDate(0, 0, -i).Format("2006-01-02"))
+			days = append(days, unow.AddDate(0, 0, -i).Format("2006-01-02"))
 		}
 		rows, _ := a.Store.WeekBlocks(userID, days)
 		if len(rows) == 0 {
@@ -467,7 +546,7 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 			a.sendLong(ctx, chatID, review, "")
 		}
 	case "/energy":
-		day := time.Now().Format("2006-01-02")
+		day := a.userNow(userID).Format("2006-01-02")
 		if arg == "" {
 			_, _ = a.Bot.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID: chatID, Text: "Какая энергия сегодня? Жми 👇",
@@ -507,7 +586,7 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 	case "/delete_day":
 		day := arg
 		if day == "" {
-			day = time.Now().Format("2006-01-02")
+			day = a.userNow(userID).Format("2006-01-02")
 		}
 		if !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(day) {
 			a.send(ctx, chatID, "Использование: /delete_day [ГГГГ-ММ-ДД], например /delete_day 2026-10-03")
@@ -589,7 +668,7 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 	case "/export":
 		month := arg
 		if month == "" {
-			month = time.Now().Format("2006-01")
+			month = a.userNow(userID).Format("2006-01")
 		}
 		if !regexp.MustCompile(`^\d{4}-\d{2}$`).MatchString(month) {
 			a.send(ctx, chatID, "Использование: /export [ГГГГ-ММ], например /export 2026-10")

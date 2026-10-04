@@ -22,19 +22,10 @@ func (s *Server) checkOrigin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// webLoc — таймзона пользователя для парсинга «завтра в 9».
-func (s *Server) webLoc() *time.Location {
-	loc, err := time.LoadLocation(s.cfg.TZ)
-	if err != nil {
-		return time.Local
-	}
-	return loc
-}
-
 func (s *Server) handleReminders(w http.ResponseWriter, r *http.Request) {
 	id, _ := s.userID(r)
 	items, _ := s.store.UpcomingReminders(id)
-	s.render(w, "reminders", map[string]any{"Items": items})
+	s.render(w, "reminders", map[string]any{"Items": items, "TZ": s.userTZName(id)})
 }
 
 // handleReminderNew: поля «что» + «когда» («завтра в 9», «через 2 часа»).
@@ -49,13 +40,13 @@ func (s *Server) handleReminderNew(w http.ResponseWriter, r *http.Request) {
 	when := strings.TrimSpace(r.FormValue("when"))
 	fail := func(msg string) {
 		items, _ := s.store.UpcomingReminders(id)
-		s.render(w, "reminders", map[string]any{"Items": items, "Err": msg})
+		s.render(w, "reminders", map[string]any{"Items": items, "Err": msg, "TZ": s.userTZName(id)})
 	}
 	if what == "" {
 		fail("Напиши, о чём напомнить.")
 		return
 	}
-	fireAt, ok := services.ParseRemindAt(when, time.Now(), s.webLoc())
+	fireAt, ok := services.ParseRemindAt(when, time.Now(), services.UserLoc(s.store, id, s.cfg.TZ))
 	if !ok {
 		fail("Не понял «когда». Примеры: «через 2 часа», «в 15:30», «завтра в 9», «в пятницу вечером».")
 		return
