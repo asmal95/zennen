@@ -16,7 +16,7 @@ ai-dictaphone-diary/
     db/db.go                 # SQLite (modernc.org/sqlite, pure Go): entries/blocks/entities/tasks/reminders/delegations/energy/users/web_sessions/week_cache/plans + миграции ALTER TABLE в Open()
     services/
       llm.go                 # NewLLMClient: OpenAI-совместимый клиент на OPENAI_BASE_URL
-      stt.go                 # Whisper API; "" при ошибке, хендлер просит текстом
+      stt.go                 # TranscribeDetailed: verbose_json + avg_logprob; conf < STTMinConfidence (-0.8, 0=неизвестно) → confirm-flow (sttok), не пишем мусор
       analyze.go             # AnalyzeFull: только LLM (блоки + entry_date + target_date); ошибка → ErrAnalyze. Промпт: systemPromptBase + PastStrs/FutureStrs + weekdayTable(Future) + требование сохранять слова-даты в тексте блока. targetOverride: явные маркеры резолвит Go поверх LLM (LLM ошибался даже на «завтра» 3/3); messageAnchor: голые «вечером» и безъякорные plan/task-блоки наследуют якорь всего сообщения (ловили «вечер отдельно» + выдуманную LLM дату 10-03). Факты прошлого не притягиваем.
       entities.go            # люди/проекты/места/даты/суммы/обещания (regex, RE2!)
       remind.go              # RemindIntentRe + ParseRemindAt («через N», «в H:MM», «завтра», части дня; границы — явными классами, НЕ \b)
@@ -29,7 +29,7 @@ ai-dictaphone-diary/
       delegate.go            # DelegationCard + AgentPlugin (NoOp/Calendar-заглушки, без исполнения)
       render.go              # RenderBlocks/RenderDay/RenderTasks (HTML); EmojiFor живёт в export.go
       export.go              # EmojiFor + RenderExportMarkdown (Obsidian/Notion)
-    handlers/handlers.go     # приём voice/audio/кружков/text + команды + колбэки (task:/edit:/del:/del_yes/del_no/energy:, pendingEdit в памяти со сбросом на команду/голос) + /link + /revoke (сессии в Sess store)
+    handlers/handlers.go     # приём voice/audio/кружков/text + команды + колбэки (task:/edit:/del:/del_yes/del_no/energy:/tz:/sttok/today:/pset:, pendingEdit/pendingConfirm в памяти со сбросом на команду/голос) + /link + /revoke (сессии в Sess store)
     scheduler/scheduler.go   # ежеминутный dispatchDigests (локальный час юзера + DigestDue + MarkDigest) + ежеминутно due-reminders + ежедневно 3:00 DailyBackup (VACUUM INTO, ротация 14)
   cmd/web/main.go              # веб-вьювер: diary.db read-only + sessions.db RW (см. WEB.md)
   internal/web/                # server.go (auth, сессии, acolor), pages.go (GET incl. timeline/tree), actions.go (POST + checkOrigin), templates/*.html (embed)

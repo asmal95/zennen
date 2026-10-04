@@ -28,10 +28,11 @@ type App struct {
 	Sess  *db.Store // sessions.db: веб-сессии (боту принадлежит на запись)
 	Bot   *bot.Bot
 
-	mu          sync.Mutex
-	pendingEdit map[int64]int64 // userID → entryID: ждём исправленный текст
-	lastLink    map[int64]time.Time
-	analysisMsg map[int]msgRef // bot messageID → запись (для правки reply)
+	mu             sync.Mutex
+	pendingEdit    map[int64]int64  // userID → entryID: ждём исправленный текст
+	pendingConfirm map[int64]string // userID → transcript: ждём «Да, разобрать» после неуверенного STT
+	lastLink       map[int64]time.Time
+	analysisMsg    map[int]msgRef // bot messageID → запись (для правки reply)
 }
 
 type msgRef struct {
@@ -43,7 +44,7 @@ type msgRef struct {
 func NewApp(cfg config.Config, store, sess *db.Store) *App {
 	return &App{Cfg: cfg, Store: store, Sess: sess,
 		pendingEdit: map[int64]int64{}, lastLink: map[int64]time.Time{},
-		analysisMsg: map[int]msgRef{}}
+		pendingConfirm: map[int64]string{}, analysisMsg: map[int]msgRef{}}
 }
 
 // rememberAnalysis связывает сообщение-разбор с записью (reply-to-edit).
@@ -90,6 +91,28 @@ func (a *App) clearPendingEdit(userID int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.pendingEdit, userID)
+}
+
+func (a *App) takePendingConfirm(userID int64) (string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	t, ok := a.pendingConfirm[userID]
+	if ok {
+		delete(a.pendingConfirm, userID)
+	}
+	return t, ok
+}
+
+func (a *App) setPendingConfirm(userID int64, transcript string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pendingConfirm[userID] = transcript
+}
+
+func (a *App) clearPendingConfirm(userID int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.pendingConfirm, userID)
 }
 
 // userNow — «сейчас» по персональной зоне пользователя (дефолт из конфига).
@@ -196,6 +219,12 @@ func renderResult(prefix string, res *services.IngestResult) string {
 	}
 	if res.Reminder != nil {
 		fmt.Fprintf(&b, "\n⏰ Напомню: %s", res.Reminder.FireAt.Format("02.01 в 15:04"))
+		if res.Reminder.Vague {
+			b.WriteString(" (время примерное — назвал неточно; не то — ответь нужным временем)")
+		}
+	}
+	if res.RemindMissed {
+		b.WriteString("\n⏰ Хотел напомнить, но не понял когда — уточни, например: «через 2 часа», «в 15:30», «завтра в 9».")
 	}
 	if res.Delegation != nil {
 		d := res.Delegation
@@ -218,12 +247,24 @@ func ingestErrText(err error) string {
 	return "❌ Ошибка сохранения: " + err.Error()
 }
 
-func (a *App) sendButtons(ctx context.Context, chatID int64, text string, entryID int64) {
-	kb := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{
+// isBackdated — запись отнесена не к сегодняшнему дню пользователя.
+func (a *App) isBackdated(userID int64, res *services.IngestResult) bool {
+	return res.Day != "" && res.Day != a.userNow(userID).Format("2006-01-02")
+}
+
+func (a *App) sendButtons(ctx context.Context, chatID int64, text string, entryID int64, backdated bool) {
+	rows := [][]models.InlineKeyboardButton{{
 		{Text: "✅ В задачу", CallbackData: fmt.Sprintf("task:%d", entryID)},
 		{Text: "✏️ Исправить", CallbackData: fmt.Sprintf("edit:%d", entryID)},
 		{Text: "🗑 Удалить", CallbackData: fmt.Sprintf("del:%d", entryID)},
-	}}}
+	}}
+	if backdated {
+		// Дата событий от LLM может ошибаться — чинится в один тап.
+		rows = append(rows, []models.InlineKeyboardButton{
+			{Text: "↩️ Нет, это сегодня", CallbackData: fmt.Sprintf("today:%d", entryID)},
+		})
+	}
+	kb := &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 	msg, err := a.Bot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID, Text: text, ParseMode: models.ParseModeHTML, ReplyMarkup: kb,
 	})
@@ -260,9 +301,10 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 	if replyTo := msg.ReplyToMessage; replyTo != nil && !strings.HasPrefix(text, "/") {
 		if entryID, ok := a.lookupAnalysisMsg(replyTo.ID); ok {
 			a.clearPendingEdit(userID)
+			a.clearPendingConfirm(userID)
 			corrected := text
 			if fileID != "" {
-				tr, err := a.downloadAndTranscribe(ctx, fileID)
+				tr, _, err := a.downloadAndTranscribe(ctx, fileID)
 				if err != nil || tr == "" {
 					a.send(ctx, chatID, "🎙 Не смог расшифровать исправление. Пришли текстом.")
 					return
@@ -281,15 +323,34 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 				}
 				return
 			}
-			a.sendButtons(ctx, chatID, renderResult("✏️ Переразобрал:", res), res.EntryID)
+			a.sendButtons(ctx, chatID, renderResult("✏️ Переразобрал:", res), res.EntryID, a.isBackdated(userID, res))
 			return
 		}
 	}
 	if fileID != "" {
 		a.clearPendingEdit(userID) // голосовое — всегда новая запись
-		transcript, err := a.downloadAndTranscribe(ctx, fileID)
+		a.clearPendingConfirm(userID)
+		transcript, conf, err := a.downloadAndTranscribe(ctx, fileID)
 		if err != nil || transcript == "" {
 			a.send(ctx, chatID, "🎙 Получил голосовое, но расшифровать не смог (ошибка STT).\nПришли то же текстом — разберу через LLM.")
+			return
+		}
+		if conf != 0 && conf < services.STTMinConfidence {
+			// Расслышал неуверенно: не пишем мусор в дневник, спрашиваем.
+			a.setPendingConfirm(userID, transcript)
+			preview := transcript
+			if len([]rune(preview)) > 500 {
+				preview = string([]rune(preview)[:500])
+			}
+			kb := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{{
+				{Text: "✅ Да, разобрать", CallbackData: "sttok"},
+			}}}
+			_, _ = a.Bot.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text: "🎧 Расслышал неуверенно, мог напутать:\n\n" + preview +
+					"\n\nРазобрать как есть? Или просто ответь исправленным текстом (reply).",
+				ReplyMarkup: kb,
+			})
 			return
 		}
 		res, err := services.IngestText(ctx, a.Cfg, a.Store, userID, kind, "", transcript)
@@ -301,18 +362,20 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 		if len([]rune(preview)) > 500 {
 			preview = string([]rune(preview)[:500])
 		}
-		a.sendButtons(ctx, chatID, renderResult("🎧 <b>Расшифровка:</b> "+preview, res), res.EntryID)
+		a.sendButtons(ctx, chatID, renderResult("🎧 <b>Расшифровка:</b> "+preview, res), res.EntryID, a.isBackdated(userID, res))
 		return
 	}
 
 	if strings.HasPrefix(text, "/") {
-		a.clearPendingEdit(userID) // команда отменяет ожидание исправления
+		a.clearPendingEdit(userID) // команда отменяет ожидания
+		a.clearPendingConfirm(userID)
 		a.handleCommand(ctx, chatID, userID, text)
 		return
 	}
 	if text == "" {
 		return
 	}
+	a.clearPendingConfirm(userID) // обычный текст — новая запись, подтверждение STT не нужно
 	if entryID, ok := a.takePendingEdit(userID); ok {
 		res, err := services.ReanalyzeEntry(ctx, a.Cfg, a.Store, userID, entryID, text)
 		if err != nil {
@@ -323,7 +386,7 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 			}
 			return
 		}
-		a.sendButtons(ctx, chatID, renderResult("✏️ Переразобрал:", res), res.EntryID)
+		a.sendButtons(ctx, chatID, renderResult("✏️ Переразобрал:", res), res.EntryID, a.isBackdated(userID, res))
 		return
 	}
 	res, err := services.IngestText(ctx, a.Cfg, a.Store, userID, "text", text, text)
@@ -331,7 +394,7 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 		a.send(ctx, chatID, ingestErrText(err))
 		return
 	}
-	a.sendButtons(ctx, chatID, renderResult("📝 Разложил:", res), res.EntryID)
+	a.sendButtons(ctx, chatID, renderResult("📝 Разложил:", res), res.EntryID, a.isBackdated(userID, res))
 }
 
 // handleCallback — кнопки под разбором, энергия и подтверждения удаления.
@@ -392,6 +455,31 @@ func (a *App) handleCallback(ctx context.Context, cb *models.CallbackQuery) {
 		}
 		return
 	}
+	if act, rest, _ := strings.Cut(cb.Data, ":"); act == "pset" {
+		// Правка статуса плана из утреннего отчёта: "pset:<id>:<done|missed>".
+		idStr, status, _ := strings.Cut(rest, ":")
+		pid, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil || pid <= 0 || (status != "done" && status != "missed") {
+			_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cb.ID, Text: "Так не бывает 🙂",
+			})
+			return
+		}
+		if err := a.Store.SetPlanStatusForce(userID, pid, status); err != nil {
+			_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cb.ID, Text: "Не сохранилось: " + err.Error(),
+			})
+			return
+		}
+		word := "пропущено"
+		if status == "done" {
+			word = "выполнено"
+		}
+		_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID, Text: fmt.Sprintf("План #%d → %s ✓", pid, word),
+		})
+		return
+	}
 	if act, rest, _ := strings.Cut(cb.Data, ":"); act == "energy" {
 		day, vstr, _ := strings.Cut(rest, ":")
 		v, err := strconv.Atoi(vstr)
@@ -410,6 +498,25 @@ func (a *App) handleCallback(ctx context.Context, cb *models.CallbackQuery) {
 		_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID, Text: fmt.Sprintf("Энергия %s: %d/10 ✓", day, v),
 		})
+		return
+	}
+	if cb.Data == "sttok" {
+		_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		if cb.Message.Message == nil {
+			return
+		}
+		chatID := cb.Message.Message.Chat.ID
+		transcript, ok := a.takePendingConfirm(userID)
+		if !ok || strings.TrimSpace(transcript) == "" {
+			a.send(ctx, chatID, "Уже нечего подтверждать — пришли голосовое ещё раз.")
+			return
+		}
+		res, err := services.IngestText(ctx, a.Cfg, a.Store, userID, "voice", "", transcript)
+		if err != nil {
+			a.send(ctx, chatID, ingestErrText(err))
+			return
+		}
+		a.sendButtons(ctx, chatID, renderResult("🎧 Разобрал как есть:", res), res.EntryID, a.isBackdated(userID, res))
 		return
 	}
 	_, _ = a.Bot.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
@@ -490,34 +597,46 @@ func (a *App) handleCallback(ctx context.Context, cb *models.CallbackQuery) {
 
 	case "del_no":
 		_, _ = a.Bot.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+
+	case "today":
+		day := a.userNow(userID).Format("2006-01-02")
+		if err := a.Store.MoveEntryDay(userID, entryID, day); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				a.send(ctx, chatID, "Запись уже удалена.")
+			} else {
+				a.send(ctx, chatID, "❌ Не получилось перенести: "+err.Error())
+			}
+			return
+		}
+		a.send(ctx, chatID, "📅 Перенёс запись на сегодня ("+day+").")
 	}
 }
 
-func (a *App) downloadAndTranscribe(ctx context.Context, fileID string) (string, error) {
+func (a *App) downloadAndTranscribe(ctx context.Context, fileID string) (string, float64, error) {
 	f, err := a.Bot.GetFile(ctx, &bot.GetFileParams{FileID: fileID})
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	link := a.Bot.FileDownloadLink(f)
 	req, _ := http.NewRequestWithContext(ctx, "GET", link, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 	tmp, err := os.CreateTemp("", "voice-*.ogg")
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	path := tmp.Name()
 	_, err = io.Copy(tmp, resp.Body)
 	tmp.Close()
 	if err != nil {
 		os.Remove(path)
-		return "", err
+		return "", 0, err
 	}
 	defer os.Remove(path)
-	return services.TranscribeFile(ctx, path, a.Cfg.OpenAIKey, a.Cfg.OpenAIBaseURL, a.Cfg.STTModel), nil
+	return services.TranscribeDetailed(ctx, path, a.Cfg.OpenAIKey, a.Cfg.OpenAIBaseURL, a.Cfg.STTModel)
 }
 
 func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text string) {

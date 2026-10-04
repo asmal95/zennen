@@ -24,6 +24,25 @@ var (
 	// reTomorrow с границами заодно не цепляет «позавтракать».
 )
 
+// VagueTime: время неточное — только голые слова без часов
+// («утром», «завтра», «вечером»). Точные формы («в 15:30»,
+// «через 2 часа», «завтра в 9») возвращают false.
+func VagueTime(text string) bool {
+	if reHalfHour.MatchString(text) {
+		return false
+	}
+	if reInHours.MatchString(text) {
+		return false
+	}
+	if reInMinutes.MatchString(text) {
+		return false
+	}
+	if reClock.MatchString(text) {
+		return false
+	}
+	return true
+}
+
 func daypartHour(text string) (int, bool) {
 	switch {
 	case strings.Contains(strings.ToLower(text), "утром"):

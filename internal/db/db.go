@@ -704,6 +704,25 @@ func (s *Store) DeleteDay(userID int64, day string) (int, error) {
 	return len(ids), nil
 }
 
+// MoveEntryDay переносит запись (и её разбор/сущности) на другой день.
+// Задачи/планы/напоминания НЕ трогаем — у них свои даты-цели.
+// Нет записи / чужая — ErrNotFound.
+func (s *Store) MoveEntryDay(userID, entryID int64, newDay string) error {
+	if _, err := s.EntryDay(userID, entryID); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE entries SET day=? WHERE id=? AND user_id=?`, newDay, entryID, userID); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE blocks SET day=? WHERE entry_id=?`, newDay, entryID); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE entities SET day=? WHERE entry_id=?`, newDay, entryID); err != nil {
+		return err
+	}
+	return nil
+}
+
 // UpdateTranscript заменяет сырьё записи при исправлении (kind происхождения сохраняем).
 func (s *Store) UpdateTranscript(userID, entryID int64, text string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE entries SET raw_text=?, transcript=? WHERE id=? AND user_id=?`,
@@ -1088,6 +1107,15 @@ func (s *Store) ClosePlan(userID, planID int64) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// SetPlanStatusForce ставит статус безусловно (ручная правка из утреннего отчёта).
+func (s *Store) SetPlanStatusForce(userID, planID int64, status string) error {
+	if status != "done" && status != "missed" && status != "open" {
+		return fmt.Errorf("bad plan status: %s", status)
+	}
+	_, err := s.db.Exec(`UPDATE plans SET status=? WHERE id=? AND user_id=?`, status, planID, userID)
+	return err
 }
 
 // SetPlanStatus ставит статус по итогам сверки (done/missed).

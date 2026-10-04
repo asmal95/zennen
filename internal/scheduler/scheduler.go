@@ -12,6 +12,7 @@ import (
 	"diarybot/internal/services"
 
 	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/robfig/cron/v3"
 )
 
@@ -50,11 +51,16 @@ func Start(ctx context.Context, b *bot.Bot, cfg config.Config, store *db.Store) 
 				}
 				// Отчёт за вчера: сверка планов с фактом (1 LLM-вызов, только если было что сверять).
 				// Отдельным plain-сообщением: в отчёте может быть сырой "<", роняющий HTML-парсинг.
+				// Под отчётом — кнопки правки статусов: LLM не последняя инстанция.
 				yday := now.AddDate(0, 0, -1).Format("2006-01-02")
 				if report, err := services.ReconcileDay(context.Background(), cfg, store, u, yday); err == nil && report != "" {
-					_, _ = b.SendMessage(context.Background(), &bot.SendMessageParams{
+					params := &bot.SendMessageParams{
 						ChatID: u, Text: "📊 Итоги вчера (" + yday + "):\n\n" + report,
-					})
+					}
+					if kb := planVoteKeyboard(store, u, yday); kb != nil {
+						params.ReplyMarkup = kb
+					}
+					_, _ = b.SendMessage(context.Background(), params)
 				}
 			}
 			if due, _ := services.DigestDue(now, cfg.EveningHour, usr.LastEveningDay); due {
@@ -98,6 +104,33 @@ func Start(ctx context.Context, b *bot.Bot, cfg config.Config, store *db.Store) 
 		c.Stop()
 	}()
 	return c, nil
+}
+
+// planVoteKeyboard — кнопки правки статусов планов дня:
+// done → «✗ #id» (в missed), missed/open → «✓ #id» (в done).
+// Нет планов — nil (сообщение уйдёт без кнопок).
+func planVoteKeyboard(store *db.Store, userID int64, day string) *models.InlineKeyboardMarkup {
+	plans, err := store.PlansForDay(userID, day, false)
+	if err != nil || len(plans) == 0 {
+		return nil
+	}
+	var rows [][]models.InlineKeyboardButton
+	for _, p := range plans {
+		label := p.Text
+		if r := []rune(label); len(r) > 18 {
+			label = string(r[:18]) + "…"
+		}
+		if p.Status == "done" {
+			rows = append(rows, []models.InlineKeyboardButton{
+				{Text: fmt.Sprintf("✗ #%d %s", p.ID, label), CallbackData: fmt.Sprintf("pset:%d:missed", p.ID)},
+			})
+		} else {
+			rows = append(rows, []models.InlineKeyboardButton{
+				{Text: fmt.Sprintf("✓ #%d %s", p.ID, label), CallbackData: fmt.Sprintf("pset:%d:done", p.ID)},
+			})
+		}
+	}
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 // mustDue — due-напоминания без проброса ошибки: тихий пропуск при сбое БД,

@@ -64,19 +64,24 @@ func GuessDue(content string) string {
 }
 
 type IngestResult struct {
-	EntryID    int64
-	Day        string // дата, к которой отнесена запись (обычно сегодня)
-	Blocks     []db.Block
-	Entities   []db.Entity
-	TaskIDs    []int64
-	PlanIDs    []int64
-	Reminder   *ReminderInfo
-	Delegation *DelegationInfo
+	EntryID  int64
+	Day      string // дата, к которой отнесена запись (обычно сегодня)
+	Blocks   []db.Block
+	Entities []db.Entity
+	TaskIDs  []int64
+	PlanIDs  []int64
+	Reminder *ReminderInfo
+	// RemindMissed: просили напомнить, но время не распозналось.
+	// Триггер НЕ поставлен — пользователь должен это увидеть.
+	RemindMissed bool
+	Delegation   *DelegationInfo
 }
 
 type ReminderInfo struct {
 	ID     int64
 	FireAt time.Time
+	// Vague: время угадано из неточных слов («утром», голое «завтра»).
+	Vague bool
 }
 
 type DelegationInfo struct {
@@ -205,7 +210,10 @@ func analyzeAndStore(ctx context.Context, cfg config.Config, store *db.Store, us
 			if err != nil {
 				return nil, err
 			}
-			res.Reminder = &ReminderInfo{ID: rid, FireAt: fireAt}
+			res.Reminder = &ReminderInfo{ID: rid, FireAt: fireAt, Vague: VagueTime(text)}
+		} else {
+			// Просили напомнить, а время не распознали: молчать нельзя.
+			res.RemindMissed = true
 		}
 	}
 	if card := DetectDelegationIntent(text); card != nil {
