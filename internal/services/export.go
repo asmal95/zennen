@@ -47,7 +47,7 @@ func RenderExportMarkdown(month string, notes []db.ExportNote) string {
 			b.WriteString("\n")
 		}
 		for _, bl := range n.Blocks {
-			fmt.Fprintf(&b, "- %s **%s**: %s\n", EmojiFor(bl.Aspect), bl.Aspect, bl.Content)
+			fmt.Fprintf(&b, "- %s **%s**: %s\n", EmojiFor(bl.Aspect), nm(bl.Aspect), bl.Content)
 		}
 		b.WriteString("\n")
 	}

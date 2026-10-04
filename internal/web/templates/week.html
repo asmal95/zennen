@@ -1,6 +1,6 @@
 {{define "week"}}<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Неделя</title>{{template "css"}}</head><body><div class="wrap">{{template "nav"}}
 <h1>📅 Неделя: {{.Blocks}} записей</h1>
-{{range $k,$v := .Counts}}<div>• {{$k}}: {{$v}}</div>{{end}}
+{{range $k,$v := .Counts}}<div>• {{aspect $k}}: {{$v}}</div>{{end}}
 {{if .HasEnergy}}<h2>❤️ Энергия</h2><div class="big">{{.Bars}}</div><div class="muted">{{.Nums}}</div>{{end}}
 <h2>📝 Итоги недели</h2>
 {{if .Review}}<pre class="review">{{.Review}}</pre>{{else if .ReviewErr}}<p class="muted">Не получилось собрать итоги. Попробуй позже.</p>{{else}}<p class="muted">За неделю пусто.</p>{{end}}

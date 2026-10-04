@@ -2,6 +2,6 @@
 <h1>🔍 Поиск</h1>
 <form class="s" method="get"><input type="text" name="q" value="{{.Q}}" placeholder="слово или фраза…"><button>Найти</button></form>
 {{if .Found}}
-{{range .Rows}}<div class="note"><div class="t">{{.Day}} · {{.Aspect}}</div><div>{{.Content}}</div></div>{{else}}<p class="muted">Ничего не нашлось.</p>{{end}}
+{{range .Rows}}<div class="note"><div class="t">{{.Day}} · {{aspect .Aspect}}</div><div>{{.Content}}</div></div>{{else}}<p class="muted">Ничего не нашлось.</p>{{end}}
 {{end}}
 </div></body></html>{{end}}

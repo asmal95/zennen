@@ -531,7 +531,7 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 		var b strings.Builder
 		fmt.Fprintf(&b, "📅 <b>Неделя</b>: %d блоков\n", len(rows))
 		for asp, n := range counts {
-			fmt.Fprintf(&b, "• %s: %d\n", asp, n)
+			fmt.Fprintf(&b, "• %s: %d\n", services.AspectName(asp), n)
 		}
 		if energy, _ := a.Store.WeekEnergy(userID, days); len(energy) > 0 {
 			bars, nums := services.EnergySparkline(days, energy)
@@ -645,7 +645,7 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 				if len([]rune(c)) > 150 {
 					c = string([]rune(c)[:150])
 				}
-				fmt.Fprintf(&b, "%s [%s] %s\n", services.EmojiFor(bl.Aspect), bl.Aspect, c)
+				fmt.Fprintf(&b, "%s [%s] %s\n", services.EmojiFor(bl.Aspect), services.AspectName(bl.Aspect), c)
 			}
 		}
 		a.sendLong(ctx, chatID, b.String(), models.ParseModeHTML)
@@ -737,7 +737,7 @@ func (a *App) handleCommand(ctx context.Context, chatID, userID int64, text stri
 			if len([]rune(c)) > 150 {
 				c = string([]rune(c)[:150])
 			}
-			fmt.Fprintf(&b, "<i>%s</i> [%s] %s\n", r.Day, r.Aspect, c)
+			fmt.Fprintf(&b, "<i>%s</i> [%s] %s\n", r.Day, services.AspectName(r.Aspect), c)
 		}
 		a.send(ctx, chatID, b.String())
 	default:
