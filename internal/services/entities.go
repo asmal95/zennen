@@ -50,5 +50,33 @@ func ExtractEntities(text string) []db.Entity {
 	for _, m := range promiseRe.FindAllString(text, -1) {
 		add("promise", m)
 	}
+	// Голые «утром/вечером» — не отдельные даты, если в тексте есть якорь
+	// («завтра», «в пятницу»): иначе «также вечером» после «завтра» двоится.
+	hasAnchor := false
+	for _, e := range out {
+		if e.Type == "date" && !bareDaypartWord(e.Value) {
+			hasAnchor = true
+			break
+		}
+	}
+	if hasAnchor {
+		kept := out[:0]
+		for _, e := range out {
+			if e.Type == "date" && bareDaypartWord(e.Value) {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		out = kept
+	}
 	return out
+}
+
+// bareDaypartWord — значение целиком есть голое время суток.
+func bareDaypartWord(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "утром", "днём", "днем", "вечером", "ночью":
+		return true
+	}
+	return false
 }

@@ -17,7 +17,7 @@ ai-dictaphone-diary/
     services/
       llm.go                 # NewLLMClient: OpenAI-совместимый клиент на OPENAI_BASE_URL
       stt.go                 # Whisper API; "" при ошибке, хендлер просит текстом
-      analyze.go             # AnalyzeFull: только LLM (блоки + entry_date + target_date); ошибка → ErrAnalyze. Промпт: systemPromptBase + PastStrs/FutureStrs + weekdayTable(Future). targetOverride: явные маркеры (завтра/послезавтра/дни недели) резолвит Go поверх LLM — LLM ошибался даже на «завтра» 3/3
+      analyze.go             # AnalyzeFull: только LLM (блоки + entry_date + target_date); ошибка → ErrAnalyze. Промпт: systemPromptBase + PastStrs/FutureStrs + weekdayTable(Future) + требование сохранять слова-даты в тексте блока. targetOverride: явные маркеры резолвит Go поверх LLM (LLM ошибался даже на «завтра» 3/3); messageAnchor: голые «вечером» и безъякорные plan/task-блоки наследуют якорь всего сообщения (ловили «вечер отдельно» + выдуманную LLM дату 10-03). Факты прошлого не притягиваем.
       entities.go            # люди/проекты/места/даты/суммы/обещания (regex, RE2!)
       remind.go              # RemindIntentRe + ParseRemindAt («через N», «в H:MM», «завтра», части дня; границы — явными классами, НЕ \b)
       pipeline.go            # IngestText (анализ → дата → AddEntry → analyzeAndStore), ReanalyzeEntry (день сохраняется), ResolveEntryDate (клямп: прошлое ≤ года, не будущее)

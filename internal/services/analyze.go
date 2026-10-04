@@ -53,7 +53,15 @@ var (
 	reDayAfter  = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)послезавтра(?:` + ruBound + `|$)`)
 	reTomorrowW = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)завтра(?:` + ruBound + `|$)`)
 	reWeekdayW  = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)(понедельник|вторник|сред[ау]|четверг|пятниц[ау]|суббот[ау]|воскресень[ея])(?:` + ruBound + `|$)`)
+	reDaypartW  = regexp.MustCompile(`(?i)(?:^|` + ruBound + `)(утром|днём|днем|вечером|ночью)(?:` + ruBound + `|$)`)
+	reDateNum   = regexp.MustCompile(`(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?`)
+	reDateWord  = regexp.MustCompile(`(?i)(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)`)
 )
+
+var ruMonths = map[string]int{
+	"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
+	"июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+}
 
 // targetOverride детерминированно резолвит явные относительные маркеры
 // в тексте ОДНОГО блока: послезавтра/завтра/дни недели.
@@ -77,6 +85,77 @@ func targetOverride(content string, now time.Time) string {
 		}
 	}
 	return ""
+}
+
+// messageAnchor ищет в ВСЁМ тексте первый явный якорь дня
+// (послезавтра → завтра → день недели → точная дата).
+// Голые «утром/вечером» якорем НЕ считаются — они наследуют его.
+func messageAnchor(text string, now time.Time) string {
+	if reDayAfter.MatchString(text) {
+		return now.AddDate(0, 0, 2).Format("2006-01-02")
+	}
+	if reTomorrowW.MatchString(text) {
+		return now.AddDate(0, 0, 1).Format("2006-01-02")
+	}
+	lower := strings.ToLower(text)
+	if m := reWeekdayW.FindStringSubmatch(lower); m != nil {
+		got := stemName(m[1])
+		for wd, name := range ruWeekdays {
+			if stemName(name) == got {
+				delta := (int(wd) - int(now.Weekday()) + 7) % 7
+				return now.AddDate(0, 0, delta).Format("2006-01-02")
+			}
+		}
+	}
+	if m := reDateWord.FindStringSubmatch(lower); m != nil {
+		day := atoi(m[1])
+		mon := ruMonths[m[2]]
+		if day >= 1 && day <= 31 && mon >= 1 {
+			y := now.Year()
+			d := time.Date(y, time.Month(mon), day, 0, 0, 0, 0, now.Location())
+			if d.Before(startOfDay(now)) {
+				d = time.Date(y+1, time.Month(mon), day, 0, 0, 0, 0, now.Location())
+			}
+			return d.Format("2006-01-02")
+		}
+	}
+	if m := reDateNum.FindStringSubmatch(text); m != nil {
+		day, mon := atoi(m[1]), atoi(m[2])
+		if day >= 1 && day <= 31 && mon >= 1 && mon <= 12 {
+			y := now.Year()
+			d := time.Date(y, time.Month(mon), day, 0, 0, 0, 0, now.Location())
+			if d.Before(startOfDay(now)) {
+				d = time.Date(y+1, time.Month(mon), day, 0, 0, 0, 0, now.Location())
+			}
+			return d.Format("2006-01-02")
+		}
+	}
+	return ""
+}
+
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// hasDateAnchor — в тексте есть явный якорь дня (не голое время суток).
+func hasDateAnchor(content string) bool {
+	lower := strings.ToLower(content)
+	return reDayAfter.MatchString(content) ||
+		reTomorrowW.MatchString(content) ||
+		reWeekdayW.MatchString(lower) ||
+		reDateWord.MatchString(lower) ||
+		reDateNum.MatchString(content)
 }
 
 var ruWeekdays = map[time.Weekday]string{
@@ -174,6 +253,7 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 		out.EntryDate = strings.TrimSpace(*data.EntryDate)
 	}
 	now := time.Now()
+	anchor := messageAnchor(text, now) // якорь всего сообщения для наследования
 	for _, b := range data.Blocks {
 		c := strings.TrimSpace(b.Content)
 		if c == "" {
@@ -192,6 +272,14 @@ func AnalyzeFull(ctx context.Context, text, apiKey, baseURL, model string) (*Ana
 		if a == "plan" || a == "task" || a == "fact" {
 			if ov := targetOverride(c, now); ov != "" {
 				t = ov // явный маркер в блоке — детерминированно поверх LLM
+			} else if anchor != "" && !hasDateAnchor(c) && reDaypartW.MatchString(text) {
+				// В блоке якоря нет (LLM мог перефразировать «вечером» прочь
+				// и выдумать дату — ловили 10-03 вместо 10-05), но сообщение
+				// говорит о части якорного дня — берём якорь всегда.
+				// Только plan/task: факты прошлого так не притягиваем.
+				if a == "plan" || a == "task" {
+					t = anchor
+				}
 			}
 		}
 		out.Targets = append(out.Targets, t)

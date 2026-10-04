@@ -31,11 +31,43 @@ type App struct {
 	mu          sync.Mutex
 	pendingEdit map[int64]int64 // userID → entryID: ждём исправленный текст
 	lastLink    map[int64]time.Time
+	analysisMsg map[int]msgRef // bot messageID → запись (для правки reply)
+}
+
+type msgRef struct {
+	entryID int64
+	at      time.Time
 }
 
 // NewApp конструирует App (карты требуют инициализации).
 func NewApp(cfg config.Config, store, sess *db.Store) *App {
-	return &App{Cfg: cfg, Store: store, Sess: sess, pendingEdit: map[int64]int64{}, lastLink: map[int64]time.Time{}}
+	return &App{Cfg: cfg, Store: store, Sess: sess,
+		pendingEdit: map[int64]int64{}, lastLink: map[int64]time.Time{},
+		analysisMsg: map[int]msgRef{}}
+}
+
+// rememberAnalysis связывает сообщение-разбор с записью (reply-to-edit).
+// Чистим старше 7 дней — карта только для свежих разборов.
+func (a *App) rememberAnalysis(msgID int, entryID int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cutoff := time.Now().AddDate(0, 0, -7)
+	for id, ref := range a.analysisMsg {
+		if ref.at.Before(cutoff) {
+			delete(a.analysisMsg, id)
+		}
+	}
+	a.analysisMsg[msgID] = msgRef{entryID: entryID, at: time.Now()}
+}
+
+func (a *App) lookupAnalysisMsg(msgID int) (int64, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ref, ok := a.analysisMsg[msgID]
+	if !ok {
+		return 0, false
+	}
+	return ref.entryID, true
 }
 
 func (a *App) takePendingEdit(userID int64) (int64, bool) {
@@ -90,7 +122,7 @@ const helpText = `🎙 <b>ИИ-Диктофон Дневника</b> (voice-firs
 /tz [Зона] — часовой пояс (по умолчанию Europe/Moscow)
 /help — это сообщение
 
-Под каждым разбором кнопки: ✅ в задачу, ✏️ исправить текст, 🗑 удалить запись.
+Под каждым разбором кнопки: ✅ в задачу, ✏️ исправить текст, 🗑 удалить запись. Исправить можно и проще: ответь на разбор (reply) исправленным текстом или голосом.
 
 <i>Чтобы что-то поручить агенту-исполнителю, напиши или скажи: «поручи агенту …» — я сохраню карточку, исполнение подключится позже плагином.</i>`
 
@@ -192,9 +224,12 @@ func (a *App) sendButtons(ctx context.Context, chatID int64, text string, entryI
 		{Text: "✏️ Исправить", CallbackData: fmt.Sprintf("edit:%d", entryID)},
 		{Text: "🗑 Удалить", CallbackData: fmt.Sprintf("del:%d", entryID)},
 	}}}
-	_, _ = a.Bot.SendMessage(ctx, &bot.SendMessageParams{
+	msg, err := a.Bot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID, Text: text, ParseMode: models.ParseModeHTML, ReplyMarkup: kb,
 	})
+	if err == nil && msg != nil {
+		a.rememberAnalysis(msg.ID, entryID)
+	}
 }
 
 func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
@@ -219,6 +254,36 @@ func (a *App) Handle(ctx context.Context, b *bot.Bot, u *models.Update) {
 		fileID, kind = msg.Audio.FileID, "voice"
 	} else if msg.VideoNote != nil {
 		fileID, kind = msg.VideoNote.FileID, "voice"
+	}
+	// Reply-to-edit: ответ на разбор (текстом или голосом) = исправление,
+	// копировать расшифровку не нужно. Команды идут обычным путём.
+	if replyTo := msg.ReplyToMessage; replyTo != nil && !strings.HasPrefix(text, "/") {
+		if entryID, ok := a.lookupAnalysisMsg(replyTo.ID); ok {
+			a.clearPendingEdit(userID)
+			corrected := text
+			if fileID != "" {
+				tr, err := a.downloadAndTranscribe(ctx, fileID)
+				if err != nil || tr == "" {
+					a.send(ctx, chatID, "🎙 Не смог расшифровать исправление. Пришли текстом.")
+					return
+				}
+				corrected = tr
+			}
+			if strings.TrimSpace(corrected) == "" {
+				return
+			}
+			res, err := services.ReanalyzeEntry(ctx, a.Cfg, a.Store, userID, entryID, corrected)
+			if err != nil {
+				if errors.Is(err, db.ErrNotFound) {
+					a.send(ctx, chatID, "Запись уже удалена — исправлять нечего.")
+				} else {
+					a.send(ctx, chatID, "💾 Исправленный текст сохранён, но разобрать через LLM не получилось: "+err.Error())
+				}
+				return
+			}
+			a.sendButtons(ctx, chatID, renderResult("✏️ Переразобрал:", res), res.EntryID)
+			return
+		}
 	}
 	if fileID != "" {
 		a.clearPendingEdit(userID) // голосовое — всегда новая запись
